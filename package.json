@@ -1,5 +1,5 @@
 {
-  "name": "@yourorg/protokit",
+  "name": "@powerduck/request",
   "version": "0.1.0",
   "description": "OpenAPI 3.2 to Postman collection debugger with HTTP, SSE and WebSocket support, plus response write-back",
   "type": "module",
