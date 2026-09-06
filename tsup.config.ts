@@ -10,8 +10,9 @@ export default defineConfig({
   format: ["esm", "cjs"],
   dts: true,
   clean: true,
-  sourcemap: true,
+  sourcemap: false,
   splitting: false,
+  minify: "terser",
   target: "node18",
   platform: "node",
   // These carry native and dynamic requires that must not be bundled.
