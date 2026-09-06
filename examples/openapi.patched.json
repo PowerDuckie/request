@@ -1,0 +1,478 @@
+{
+  "openapi": "3.2.0",
+  "info": {
+    "title": "Demo API",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://{host}/v1",
+      "variables": {
+        "host": {
+          "default": "api.example.com",
+          "enum": [
+            "api.example.com",
+            "staging.example.com"
+          ]
+        }
+      }
+    }
+  ],
+  "x-postman-scripts": {
+    "preRequest": "pm.environment.set('requestStartedAt', Date.now().toString());"
+  },
+  "paths": {
+    "/users/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getUser",
+        "summary": "Fetch a single user",
+        "parameters": [
+          {
+            "name": "include",
+            "in": "query",
+            "required": false,
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "profile",
+                  "roles"
+                ]
+              }
+            }
+          }
+        ],
+        "x-postman-scripts": {
+          "test": [
+            "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+            "pm.test('payload has an id', function () { pm.expect(pm.response.json()).to.have.property('id'); });",
+            "pm.environment.set('userName', pm.response.json().name);"
+          ]
+        },
+        "responses": {
+          "200": {
+            "description": "The requested user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                },
+                "examples": {
+                  "capturedSample": {
+                    "summary": "Captured from a live call",
+                    "value": {
+                      "id": "2",
+                      "name": "User 2",
+                      "email": "user2@example.com",
+                      "tags": [
+                        "a",
+                        "b"
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "x-ratelimit-remaining": {
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "99"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orders": {
+      "post": {
+        "operationId": "createOrder",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "sku",
+                  "qty"
+                ],
+                "properties": {
+                  "sku": {
+                    "type": "string"
+                  },
+                  "qty": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Order created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "orderId": {
+                      "type": "string",
+                      "examples": [
+                        "ord_1"
+                      ]
+                    },
+                    "echo": {
+                      "type": "object",
+                      "properties": {
+                        "sku": {
+                          "type": "string",
+                          "examples": [
+                            "A-1"
+                          ]
+                        },
+                        "qty": {
+                          "type": "integer",
+                          "examples": [
+                            2
+                          ]
+                        }
+                      },
+                      "required": [
+                        "sku",
+                        "qty"
+                      ]
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "examples": [
+                        "2026-09-06T22:30:18.628Z"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "orderId",
+                    "echo",
+                    "createdAt"
+                  ]
+                },
+                "examples": {
+                  "capturedSample": {
+                    "summary": "Captured from a live call",
+                    "value": {
+                      "orderId": "ord_1",
+                      "echo": {
+                        "sku": "A-1",
+                        "qty": 2
+                      },
+                      "createdAt": "2026-09-06T22:30:18.628Z"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat/completions": {
+      "post": {
+        "operationId": "streamChat",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "default": "demo-model"
+                  },
+                  "stream": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "messages": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A stream of completion chunks",
+            "content": {
+              "text/event-stream": {
+                "itemSchema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "examples": [
+                            "chunk_0",
+                            "chunk_1",
+                            "chunk_2"
+                          ]
+                        },
+                        "choices": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "delta": {
+                                "type": "object",
+                                "properties": {
+                                  "content": {
+                                    "type": "string",
+                                    "examples": [
+                                      "Hello",
+                                      " from",
+                                      " the"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "content"
+                                ]
+                              },
+                              "index": {
+                                "type": "integer",
+                                "examples": [
+                                  0
+                                ]
+                              }
+                            },
+                            "required": [
+                              "delta",
+                              "index"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "choices"
+                      ]
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "event": {
+                      "type": "string",
+                      "enum": [
+                        "chunk"
+                      ]
+                    },
+                    "retry": {
+                      "type": "integer"
+                    }
+                  }
+                },
+                "x-protokit-sample-count": 6
+              }
+            },
+            "headers": {
+              "cache-control": {
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "no-cache"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/realtime/{room}": {
+      "parameters": [
+        {
+          "name": "room",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "joinRoom",
+        "x-protocol": "websocket",
+        "x-websocket": {
+          "subprotocols": [
+            "json.v1"
+          ],
+          "keepAlive": {
+            "intervalMs": 15000,
+            "payload": "ping"
+          }
+        },
+        "responses": {
+          "101": {
+            "description": "Switching protocols",
+            "headers": {
+              "upgrade": {
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "websocket"
+                  ]
+                }
+              },
+              "sec-websocket-accept": {
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "L7gieCrA1D+lEIL/ivPyBE/GyjI="
+                  ]
+                }
+              },
+              "sec-websocket-protocol": {
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "json.v1"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "itemSchema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "event": {
+                      "type": "string",
+                      "enum": [
+                        "text"
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "examples": [
+                            "subscribe",
+                            "welcome",
+                            "ack"
+                          ]
+                        },
+                        "channel": {
+                          "type": "string",
+                          "examples": [
+                            "messages"
+                          ]
+                        },
+                        "room": {
+                          "type": "string",
+                          "examples": [
+                            "general"
+                          ]
+                        },
+                        "received": {
+                          "type": "string",
+                          "examples": [
+                            "{\"type\":\"subscribe\",\"channel\":\"messages\"}",
+                            "{\"type\":\"ping\",\"ts\":1788733814188}"
+                          ]
+                        },
+                        "ts": {
+                          "type": "integer",
+                          "examples": [
+                            1788733814188
+                          ]
+                        },
+                        "seq": {
+                          "type": "integer",
+                          "examples": [
+                            1,
+                            2,
+                            3
+                          ]
+                        },
+                        "text": {
+                          "type": "string",
+                          "examples": [
+                            "tick 1",
+                            "tick 2",
+                            "tick 3"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ]
+                    },
+                    "retry": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                },
+                "x-protokit-sample-count": 15
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "User": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          }
+        }
+      }
+    }
+  }
+}

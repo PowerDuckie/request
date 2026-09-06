@@ -1,0 +1,98 @@
+{
+  "info": {
+    "_postman_id": "protokit-mtqdxjpm",
+    "name": "Demo API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "getUser",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "id": "protokit-test-0",
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('payload has an id', function () { pm.expect(pm.response.json()).to.have.property('id'); });",
+              "pm.environment.set('userName', pm.response.json().name);"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "id": "protokit-test-1",
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('ok', function () { pm.response.to.be.ok; });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/users/:id",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "users",
+            ":id"
+          ],
+          "query": [
+            {
+              "key": "include",
+              "value": "",
+              "disabled": true
+            }
+          ],
+          "variable": [
+            {
+              "key": "id",
+              "value": "{{userId}}"
+            }
+          ]
+        },
+        "description": "Fetch a single user"
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:4000/v1"
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "id": "protokit-prerequest-0",
+        "type": "text/javascript",
+        "exec": [
+          "pm.environment.set('requestStartedAt', Date.now().toString());"
+        ]
+      }
+    }
+  ]
+}
