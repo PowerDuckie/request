@@ -1,9 +1,14 @@
-import type { ProtocolAdapter, AdapterContext } from "../../core/protocol";
+import type {
+  ProtocolAdapter,
+  AdapterContext,
+  ExecuteContext,
+} from "../../core/protocol";
 import type { SendOptions, ExecResult } from "../../core/types";
 import { buildCollection, type BuiltCollection } from "./collection";
 import { buildEnvironment } from "./environment";
 import { isStreamingOperation } from "./detect";
 import { runWithPostman } from "./runner";
+
 export { locateOperation } from "../../openapi/locate";
 export { createResolver } from "../../openapi/deref";
 
@@ -48,7 +53,11 @@ export class HttpAdapter implements ProtocolAdapter<HttpPlan> {
     };
   }
 
-  execute(plan: HttpPlan, options: SendOptions): Promise<ExecResult> {
+  execute(
+    plan: HttpPlan,
+    options: SendOptions,
+    ctx?: ExecuteContext,
+  ): Promise<ExecResult> {
     return runWithPostman(
       {
         collectionJson: plan.collection,
@@ -56,6 +65,7 @@ export class HttpAdapter implements ProtocolAdapter<HttpPlan> {
         streamingHint: plan.streaming,
       },
       options,
+      ctx,
     );
   }
 }
@@ -65,3 +75,4 @@ export { buildEnvironment, resolveServerUrl } from "./environment";
 export { SseParser } from "./sse-parser";
 export { buildRunOptions } from "./runner-options";
 export { runWithPostman } from "./runner";
+export type { RunInput, StopReason } from "./runner";

@@ -1,3 +1,10 @@
+/** Keys that must never be assigned through a merge or clone. */
+const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function isUnsafeKey(key: string): boolean {
+  return UNSAFE_KEYS.has(key);
+}
+
 /** Deep clone with a safe fallback for environments without structuredClone. */
 export function deepClone<T>(value: T): T {
   if (value === null || typeof value !== "object") return value;
@@ -11,53 +18,163 @@ export function deepClone<T>(value: T): T {
   return jsonClone(value);
 }
 
-/** JSON-based clone that tolerates circular references by replacing them with null. */
+/**
+ * JSON-shaped clone.
+ *
+ * Unlike a JSON.parse(JSON.stringify(...)) round trip this:
+ *  - only collapses true cycles (an ancestor back-reference) to null, so a
+ *    value referenced twice in sibling positions is cloned twice instead of
+ *    being silently dropped;
+ *  - never throws on a circular graph or on `undefined` input;
+ *  - drops prototype-polluting keys.
+ */
 export function jsonClone<T>(value: T): T {
-  const seen = new WeakSet<object>();
-  return JSON.parse(
-    JSON.stringify(value, (_key, val) => {
-      if (val && typeof val === "object") {
-        if (seen.has(val as object)) return undefined;
-        seen.add(val as object);
-      }
-      return val;
-    }),
-  );
+  return cloneJsonLike(value, new Set<object>()) as T;
 }
 
-/** Replace `{{name}}` placeholders using the provided variable map. */
-export function interpolate(
-  input: unknown,
-  vars: Record<string, string>,
-): string {
-  const source = input == null ? "" : String(input);
-  if (source.indexOf("{{") === -1) return source;
-  return source.replace(/\{\{\s*([\w.$-]+)\s*\}\}/g, (match, key: string) =>
-    Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] : match,
-  );
+function cloneJsonLike(value: unknown, ancestors: Set<object>): unknown {
+  if (value === null) return null;
+
+  const type = typeof value;
+  if (type === "string" || type === "boolean") return value;
+  if (type === "number") {
+    // NaN and +/-Infinity are not representable in JSON.
+    return Number.isFinite(value as number) ? value : null;
+  }
+  if (type === "bigint") return (value as bigint).toString();
+  // undefined, function and symbol have no JSON representation.
+  if (type !== "object") return undefined;
+
+  const obj = value as object;
+
+  // A back-reference to an ancestor is a real cycle.
+  if (ancestors.has(obj)) return null;
+
+  // Honor toJSON (Date, Postman SDK objects, etc.) before walking properties.
+  const toJSON = (obj as any).toJSON;
+  if (typeof toJSON === "function") {
+    let projected: unknown;
+    try {
+      projected = toJSON.call(obj);
+    } catch {
+      return null;
+    }
+    // Guard against a toJSON that returns the receiver itself.
+    if (projected === obj) return null;
+    return cloneJsonLike(projected, ancestors);
+  }
+
+  ancestors.add(obj);
+  try {
+    if (Array.isArray(obj)) {
+      const arr: unknown[] = new Array(obj.length);
+      for (let i = 0; i < obj.length; i += 1) {
+        const cloned = cloneJsonLike(obj[i], ancestors);
+        // Holes and non-representable entries become null, matching JSON.
+        arr[i] = cloned === undefined ? null : cloned;
+      }
+      return arr;
+    }
+
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(obj)) {
+      if (isUnsafeKey(key)) continue;
+      let raw: unknown;
+      try {
+        raw = (obj as any)[key];
+      } catch {
+        continue; // A throwing getter is skipped rather than fatal.
+      }
+      const cloned = cloneJsonLike(raw, ancestors);
+      if (cloned !== undefined) out[key] = cloned;
+    }
+    return out;
+  } finally {
+    ancestors.delete(obj);
+  }
 }
 
 /**
+ * Replace `{{name}}` placeholders using the provided variable map.
+ * Unknown placeholders are left untouched so downstream consumers (Postman)
+ * can still resolve them.
+ */
+export function interpolate(
+  input: unknown,
+  vars?: Record<string, unknown> | null,
+): string {
+  const source = toStringSafe(input);
+  if (!source || source.indexOf("{{") === -1) return source;
+  if (!vars) return source;
+
+  return source.replace(/\{\{\s*([\w.$-]+)\s*\}\}/g, (match, key: string) => {
+    if (!Object.prototype.hasOwnProperty.call(vars, key)) return match;
+    const replacement = vars[key];
+    if (replacement === undefined || replacement === null) return match;
+    return toStringSafe(replacement);
+  });
+}
+
+/** String coercion that never throws and never yields "[object Object]" silently. */
+function toStringSafe(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return String(value);
+  }
+  try {
+    const json = JSON.stringify(value);
+    return typeof json === "string" ? json : "";
+  } catch {
+    try {
+      return String(value);
+    } catch {
+      return "";
+    }
+  }
+}
+
+/** Guards runaway recursion on adversarial or self-referential option objects. */
+const MAX_MERGE_DEPTH = 64;
+
+/**
  * Recursively merge `override` into `base`.
- * Arrays and class instances are replaced wholesale rather than merged,
- * because runtime options such as VariableScope must not be structurally mixed.
+ * Arrays and class instances are replaced wholesale rather than merged, because
+ * runtime options such as VariableScope or `certificates` must not be
+ * structurally mixed. Prototype-polluting keys are ignored.
  */
 export function deepMerge<T extends Record<string, any>>(
   base: T,
-  override?: Partial<T>,
+  override?: Partial<T> | null,
 ): T {
-  if (!override) return base;
+  return mergeInto(base, override, 0) as T;
+}
+
+function mergeInto(
+  base: Record<string, any>,
+  override: Record<string, any> | null | undefined,
+  depth: number,
+): Record<string, any> {
+  if (!override || !isPlainObject(override)) return base;
+  if (depth >= MAX_MERGE_DEPTH) return override;
+
   const out: Record<string, any> = { ...base };
-  for (const [key, value] of Object.entries(override)) {
+  for (const key of Object.keys(override)) {
+    if (isUnsafeKey(key)) continue;
+    const value = override[key];
     if (value === undefined) continue;
     const prev = out[key];
     if (isPlainObject(prev) && isPlainObject(value)) {
-      out[key] = deepMerge(prev, value);
+      out[key] = mergeInto(prev, value, depth + 1);
     } else {
       out[key] = value;
     }
   }
-  return out as T;
+  return out;
 }
 
 export function isPlainObject(value: unknown): value is Record<string, any> {
@@ -70,26 +187,30 @@ export function isPlainObject(value: unknown): value is Record<string, any> {
 /** Guarantee a promise settles at most once, regardless of how many callbacks fire. */
 export function createLatch<T>() {
   let settled = false;
-  let resolveFn: (v: T) => void;
-  let rejectFn: (e: unknown) => void;
+  let resolveFn!: (v: T) => void;
+  let rejectFn!: (e: unknown) => void;
   const promise = new Promise<T>((res, rej) => {
     resolveFn = res;
     rejectFn = rej;
   });
+  // Prevents an unhandled rejection warning if nobody awaits a rejected latch.
+  promise.catch(() => {});
   return {
     promise,
     get settled() {
       return settled;
     },
     resolve(value: T) {
-      if (settled) return;
+      if (settled) return false;
       settled = true;
       resolveFn(value);
+      return true;
     },
     reject(reason: unknown) {
-      if (settled) return;
+      if (settled) return false;
       settled = true;
       rejectFn(reason);
+      return true;
     },
   };
 }
@@ -106,4 +227,47 @@ export function safeClearTimeout(
     }
   }
   return null;
+}
+
+/** Safe interval helper, mirroring safeClearTimeout. */
+export function safeClearInterval(
+  timer: ReturnType<typeof setInterval> | null | undefined,
+): null {
+  if (timer) {
+    try {
+      clearInterval(timer);
+    } catch {
+      /* ignore */
+    }
+  }
+  return null;
+}
+
+/** Invoke a user callback without letting it break the caller's control flow. */
+export function safeCall<A extends unknown[]>(
+  fn: ((...args: A) => unknown) | undefined,
+  ...args: A
+): void {
+  if (typeof fn !== "function") return;
+  try {
+    fn(...args);
+  } catch {
+    /* User callbacks must never abort execution. */
+  }
+}
+
+/**
+ * Coerce a value into a positive integer, returning `fallback` for anything
+ * unusable. Useful for validating caps such as maxEvents or maxStreamMs.
+ */
+export function positiveInt(
+  value: unknown,
+  fallback: number,
+  max = Number.MAX_SAFE_INTEGER,
+): number {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  const int = Math.floor(n);
+  if (int <= 0) return fallback;
+  return Math.min(int, max);
 }

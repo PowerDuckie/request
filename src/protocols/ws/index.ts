@@ -1,4 +1,8 @@
-import type { ProtocolAdapter, AdapterContext } from "../../core/protocol";
+import type {
+  ProtocolAdapter,
+  AdapterContext,
+  ExecuteContext,
+} from "../../core/protocol";
 import type { SendOptions, ExecResult } from "../../core/types";
 import { resolveWsConfig, type ResolvedWsConfig } from "./config";
 import { runWebSocket } from "./connection";
@@ -8,6 +12,10 @@ export interface WsPlan {
   /** Environment document mirroring the HTTP adapter's output shape. */
   environment: Record<string, any>;
 }
+
+/** Same detection as the HTTP environment builder uses. */
+const SECRET_KEY_PATTERN =
+  /(token|secret|password|passwd|apikey|api_key|credential|private)/i;
 
 /**
  * WebSocket adapter.
@@ -38,31 +46,41 @@ export class WebSocketAdapter implements ProtocolAdapter<WsPlan> {
 
   plan(ctx: AdapterContext): WsPlan {
     const config = resolveWsConfig(ctx.located, ctx.spec, ctx.options);
+    const values = [
+      { key: "wsUrl", value: config.url, type: "default", enabled: true },
+      ...Object.entries(ctx.options.variables ?? {})
+        .filter(([key]) => key !== "wsUrl")
+        .map(([key, value]) => ({
+          key,
+          value: value == null ? "" : String(value),
+          type: SECRET_KEY_PATTERN.test(key) ? "secret" : "default",
+          enabled: true,
+        })),
+    ];
+
     return {
       config,
       environment: {
-        id: `protokit-ws-env-${Date.now().toString(36)}`,
+        // Two random-free components, matching the HTTP builder, so two
+        // environments created in the same millisecond still differ.
+        id: `protokit-ws-env-${Date.now().toString(36)}-${(
+          (Math.random() * 0xffffff) |
+          0
+        ).toString(36)}`,
         name: `${ctx.spec?.info?.title ?? "API"} WebSocket Environment`,
-        values: [
-          { key: "wsUrl", value: config.url, type: "default", enabled: true },
-          ...Object.entries(ctx.options.variables ?? {}).map(
-            ([key, value]) => ({
-              key,
-              value: String(value ?? ""),
-              type: /token|secret|password|apikey/i.test(key)
-                ? "secret"
-                : "default",
-              enabled: true,
-            }),
-          ),
-        ],
+        values,
         _postman_variable_scope: "environment",
+        _postman_exported_at: new Date().toISOString(),
       },
     };
   }
 
-  execute(plan: WsPlan, options: SendOptions): Promise<ExecResult> {
-    return runWebSocket(plan.config, options);
+  execute(
+    plan: WsPlan,
+    options: SendOptions,
+    ctx?: ExecuteContext,
+  ): Promise<ExecResult> {
+    return runWebSocket(plan.config, options, ctx);
   }
 }
 

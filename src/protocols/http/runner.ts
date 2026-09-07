@@ -1,4 +1,6 @@
-import runtime from "postman-runtime"; 
+import http from "node:http";
+import https from "node:https";
+import runtime from "postman-runtime";
 import sdk from "postman-collection";
 import type {
   SendOptions,
@@ -10,11 +12,36 @@ import type {
   ScriptOutcome,
   ReplayRecord,
 } from "../../core/types";
+import type { ExecuteContext } from "../../core/protocol";
 import { err, toErrorInfo } from "../../core/errors";
 import { createLatch, safeClearTimeout, jsonClone } from "../../core/utils";
 import { SseParser } from "./sse-parser";
 import { isSseContentType, isStreamingContentType } from "./detect";
 import { buildRunOptions } from "./runner-options";
+
+/**
+ * Lifecycle of a single HTTP run.
+ *
+ * initialized -> headers -> streaming -> stopping -> finalized
+ *
+ * Every exit path funnels through `finalize()`, which is idempotent, so a
+ * watchdog firing concurrently with `done` cannot produce two results or flush
+ * the parser twice.
+ */
+type RunPhase =
+  | "initialized"
+  | "headers"
+  | "streaming"
+  | "stopping"
+  | "finalized";
+
+/** Why sampling ended, surfaced on the result so callers can distinguish causes. */
+export type StopReason =
+  | "maxEvents"
+  | "maxStreamMs"
+  | "maxResponseSize"
+  | "aborted"
+  | "hardTimeout";
 
 /** Flatten a Postman HeaderList into a plain object. */
 function headersOf(headerList: any): Record<string, string> {
@@ -42,7 +69,10 @@ function scopeToObject(scope: any): Record<string, string> | undefined {
     const out: Record<string, string> = {};
     for (const entry of list) {
       if (!entry || entry.enabled === false || entry.key == null) continue;
-      out[String(entry.key)] = entry.value == null ? "" : String(entry.value);
+      const key = String(entry.key);
+      // Never let a scope key land on Object.prototype.
+      if (key === "__proto__" || key === "constructor") continue;
+      out[key] = entry.value == null ? "" : String(entry.value);
     }
     return out;
   } catch {
@@ -77,6 +107,77 @@ function extractRequestBody(request: any): unknown {
     return undefined;
   }
 }
+
+/**
+ * Agents that remember every socket they open.
+ *
+ * `run.abort()` only stops the runtime from scheduling further work; the socket
+ * belonging to the in-flight request keeps streaming, which is why an endless
+ * SSE response used to hang until the hard timeout. Owning the sockets gives us
+ * a real cancellation primitive.
+ */
+interface SocketTracker {
+  agents: { http: http.Agent; https: https.Agent };
+  destroyAll(): number;
+}
+
+function createSocketTracker(): SocketTracker | null {
+  try {
+    const sockets = new Set<any>();
+
+    const remember = (socket: any) => {
+      if (!socket || typeof socket.destroy !== "function") return socket;
+      sockets.add(socket);
+      const forget = () => sockets.delete(socket);
+      socket.once?.("close", forget);
+      socket.once?.("error", forget);
+      return socket;
+    };
+
+    // keepAlive stays off: a pooled socket could outlive the run and be handed
+    // to an unrelated request after we destroyed it.
+    const httpAgent = new http.Agent({ keepAlive: false });
+    const httpsAgent = new https.Agent({ keepAlive: false });
+
+    (httpAgent as any).createConnection = function (opts: any, cb: any) {
+      return remember(
+        http.Agent.prototype.createConnection.call(this, opts, cb),
+      );
+    };
+    (httpsAgent as any).createConnection = function (opts: any, cb: any) {
+      return remember(
+        https.Agent.prototype.createConnection.call(this, opts, cb),
+      );
+    };
+
+    return {
+      agents: { http: httpAgent, https: httpsAgent },
+      destroyAll() {
+        let count = 0;
+        for (const socket of Array.from(sockets)) {
+          try {
+            socket.destroy();
+            count += 1;
+          } catch {
+            /* Already closed. */
+          }
+        }
+        sockets.clear();
+        try {
+          httpAgent.destroy();
+          httpsAgent.destroy();
+        } catch {
+          /* ignore */
+        }
+        return count;
+      },
+    };
+  } catch {
+    // If the agent shape ever changes, fall back to abort-only behaviour.
+    return null;
+  }
+}
+
 export interface RunInput {
   collectionJson: any;
   baseUrl: string;
@@ -87,20 +188,39 @@ export interface RunInput {
 export function runWithPostman(
   input: RunInput,
   options: SendOptions,
+  ctx?: ExecuteContext,
 ): Promise<ExecResult> {
   const latch = createLatch<ExecResult>();
 
   // ---- Run state ----
   const startedAt = Date.now();
+  let phase: RunPhase = "initialized";
   let firstByteAt: number | undefined;
   let streaming = input.streamingHint;
-  let stopRequested = false;
   let truncated = false;
+  let stopReason: StopReason | undefined;
+  let networkDurationMs: number | undefined;
 
-  const parser = new SseParser();
+  const maxEvents = normalizePositive(options.maxEvents, 100);
+  const maxStreamMs = normalizePositive(options.maxStreamMs, 30_000);
+  const requestTimeout = normalizePositive(
+    options.runner?.timeout?.request ?? options.timeout,
+    30_000,
+  );
+  const maxResponseSize =
+    typeof options.maxResponseSize === "number"
+      ? options.maxResponseSize
+      : undefined;
+
+  const parser = new SseParser({
+    maxBufferChars: options.maxBufferChars,
+    maxEventChars: options.maxEventChars,
+    inheritEventId: options.inheritEventId,
+  });
   const events: StreamEvent[] = [];
   const bodyChunks: Buffer[] = [];
   let receivedBytes = 0;
+  let sawResponseData = false;
 
   const report: ScriptReport = {
     prerequest: [],
@@ -116,27 +236,60 @@ export function runWithPostman(
   let runHandle: any = null;
   let streamTimer: ReturnType<typeof setTimeout> | null = null;
   let hardTimer: ReturnType<typeof setTimeout> | null = null;
+  let stopFuse: ReturnType<typeof setTimeout> | null = null;
+  let detachSignal: (() => void) | null = null;
 
-  const maxEvents = options.maxEvents ?? 100;
-  const maxStreamMs = options.maxStreamMs ?? 30_000;
-  const requestTimeout =
-    options.runner?.timeout?.request ?? options.timeout ?? 30_000;
+  const tracker = hasUserAgents(options) ? null : createSocketTracker();
 
-  /** Stop a long-lived stream once a sampling limit is reached. */
-  const stopStream = (reason: string) => {
-    if (stopRequested) return;
-    stopRequested = true;
+  const note = (level: ConsoleLog["level"], message: string) => {
+    report.console.push({ level, messages: [message], at: Date.now() });
+  };
+
+  const unref = (timer: unknown) => {
+    if (timer && typeof (timer as any).unref === "function") {
+      (timer as any).unref();
+    }
+    return timer as ReturnType<typeof setTimeout>;
+  };
+
+  /**
+   * Terminate the run.
+   *
+   * Order matters: ask the runtime to stop first so it will not schedule another
+   * item, then tear down the transport so the in-flight response actually ends.
+   * A short fuse guarantees finalization even if neither callback fires.
+   */
+  const stop = (reason: StopReason, message?: string) => {
+    if (phase === "stopping" || phase === "finalized") return;
+    phase = "stopping";
+    stopReason = reason;
     truncated = true;
-    report.console.push({
-      level: "debug",
-      messages: [`[protokit] stream sampling stopped: ${reason}`],
-      at: Date.now(),
-    });
+    note("debug", `[protokit] stopping run: ${message ?? reason}`);
+
     try {
       runHandle?.abort?.();
     } catch {
       /* The run may already be finished. */
     }
+
+    const destroyed = tracker?.destroyAll() ?? 0;
+    if (destroyed > 0) {
+      note("debug", `[protokit] destroyed ${destroyed} open socket(s)`);
+    }
+
+    // If the runtime swallows the abort we still resolve promptly instead of
+    // waiting for the hard timeout.
+    stopFuse = unref(
+      setTimeout(() => {
+        if (phase !== "finalized") {
+          note(
+            "warn",
+            "[protokit] runtime did not report completion after stop",
+          );
+          finalize();
+        }
+      }, 250),
+    );
   };
 
   const toScriptOutcome = (
@@ -154,27 +307,40 @@ export function runWithPostman(
   });
 
   const finalize = () => {
+    if (phase === "finalized") return;
+    phase = "finalized";
+
     streamTimer = safeClearTimeout(streamTimer);
     hardTimer = safeClearTimeout(hardTimer);
+    stopFuse = safeClearTimeout(stopFuse);
+    detachSignal?.();
+    detachSignal = null;
+    tracker?.destroyAll();
 
     if (streaming) {
-      // Emit any partial event still sitting in the parser buffer.
+      // Emit whatever is still buffered. Events past the cap are counted but
+      // not delivered, so `events.length` never exceeds `maxEvents`.
       for (const event of parser.flush()) {
         if (events.length < maxEvents) {
           events.push(event);
           safeInvoke(() => options.onEvent?.(event));
+        } else {
+          truncated = true;
         }
       }
+      if (parser.truncated) truncated = true;
     }
 
+    const endedAt = Date.now();
+
     if (!captured) {
-      const endedAt = Date.now();
+      const sampled = !!stopReason && events.length > 0;
       captured = {
         protocol: streaming ? "sse" : "http",
         request: { method: "", url: "", headers: {} },
         response: {
-          status: stopRequested && events.length ? 200 : 0,
-          statusText: stopRequested
+          status: sampled ? 200 : 0,
+          statusText: sampled
             ? "Stream sampling stopped"
             : "No response received",
           headers: {},
@@ -189,58 +355,91 @@ export function runWithPostman(
           sizeBytes: receivedBytes,
           ...(truncated ? { truncated: true } : {}),
         },
-        ...(stopRequested && events.length
+        ...(sampled
           ? {}
-          : { error: { message: "Runner finished without a response" } }),
+          : {
+              error: {
+                message:
+                  stopReason === "aborted"
+                    ? "Run aborted before a response was received"
+                    : "Runner finished without a response",
+                code: stopReason,
+              },
+            }),
       };
-    } else if (streaming) {
-      // Re-attach in case flush() produced events after the request callback ran.
-      captured.response.events = events;
+    } else {
+      // Re-attach: flush() may have produced events after `request` ran, and the
+      // stop reason is often only known at that point.
+      if (streaming) captured.response.events = events;
       if (truncated) captured.response.truncated = true;
+      captured.response.timings = {
+        ...captured.response.timings,
+        startedAt,
+        endedAt,
+        durationMs: endedAt - startedAt,
+        firstByteMs: firstByteAt ? firstByteAt - startedAt : undefined,
+        ...(networkDurationMs !== undefined ? { networkDurationMs } : {}),
+      };
     }
 
+    if (stopReason) captured.response.stopReason = stopReason;
+    if (parser.droppedEvents) {
+      captured.response.droppedEvents = parser.droppedEvents;
+    }
     captured.scripts = report;
     latch.resolve(captured);
   };
 
-  // Absolute safety net: never let the promise hang if the runtime goes silent.
-  hardTimer = setTimeout(
-    () => {
-      if (latch.settled) return;
-      report.console.push({
-        level: "error",
-        messages: ["[protokit] hard timeout reached, forcing completion"],
-        at: Date.now(),
-      });
-      try {
-        runHandle?.abort?.();
-      } catch {
-        /* ignore */
-      }
-      truncated = true;
+  // External cancellation, e.g. an AbortSignal owned by the caller.
+  if (ctx?.signal) {
+    const signal = ctx.signal;
+    if (signal.aborted) {
+      // Still return a well-formed result rather than throwing asynchronously.
+      stop("aborted", "signal already aborted");
       finalize();
-    },
-    requestTimeout + maxStreamMs + 30_000,
-  );
-  // Do not keep the process alive solely for this watchdog.
-  if (
-    typeof hardTimer === "object" &&
-    typeof (hardTimer as any).unref === "function"
-  ) {
-    (hardTimer as any).unref();
+      return latch.promise;
+    }
+    const onAbort = () => stop("aborted", "caller aborted the request");
+    signal.addEventListener("abort", onAbort, { once: true });
+    detachSignal = () => signal.removeEventListener("abort", onAbort);
   }
+
+  // Absolute safety net: never let the promise hang if the runtime goes silent.
+  hardTimer = unref(
+    setTimeout(
+      () => {
+        if (phase === "finalized") return;
+        note("error", "[protokit] hard timeout reached, forcing completion");
+        stopReason ??= "hardTimeout";
+        truncated = true;
+        try {
+          runHandle?.abort?.();
+        } catch {
+          /* ignore */
+        }
+        tracker?.destroyAll();
+        finalize();
+      },
+      requestTimeout + maxStreamMs + 30_000,
+    ),
+  );
+
+  const failFast = (code: string, message: string, cause: unknown) => {
+    phase = "finalized";
+    hardTimer = safeClearTimeout(hardTimer);
+    detachSignal?.();
+    tracker?.destroyAll();
+    return Promise.reject(err(code as any, message, cause));
+  };
 
   let collection: any;
   try {
     collection = new sdk.Collection(jsonClone(input.collectionJson));
   } catch (e) {
-    hardTimer = safeClearTimeout(hardTimer);
-    return Promise.reject(
-      err(
-        "BAD_COLLECTION",
-        `Failed to construct collection: ${toErrorInfo(e).message}`,
-        e,
-      ),
+    return failFast(
+      "BAD_COLLECTION",
+      `Failed to construct collection: ${toErrorInfo(e).message}`,
+      e,
     );
   }
 
@@ -250,14 +449,17 @@ export function runWithPostman(
       baseUrl: input.baseUrl,
       streaming: input.streamingHint,
     });
+    if (tracker) {
+      runOptions.requester = {
+        ...(runOptions.requester ?? {}),
+        agents: tracker.agents,
+      };
+    }
   } catch (e) {
-    hardTimer = safeClearTimeout(hardTimer);
-    return Promise.reject(
-      err(
-        "BAD_RUN_OPTIONS",
-        `Failed to build runtime options: ${toErrorInfo(e).message}`,
-        e,
-      ),
+    return failFast(
+      "BAD_RUN_OPTIONS",
+      `Failed to build runtime options: ${toErrorInfo(e).message}`,
+      e,
     );
   }
 
@@ -265,19 +467,19 @@ export function runWithPostman(
   try {
     runner = new runtime.Runner();
   } catch (e) {
-    hardTimer = safeClearTimeout(hardTimer);
-    return Promise.reject(
-      err(
-        "RUNTIME_INIT",
-        `Failed to create runner: ${toErrorInfo(e).message}`,
-        e,
-      ),
+    return failFast(
+      "RUNTIME_INIT",
+      `Failed to create runner: ${toErrorInfo(e).message}`,
+      e,
     );
   }
 
   runner.run(collection, runOptions, (initError: any, run: any) => {
     if (initError) {
+      phase = "finalized";
       hardTimer = safeClearTimeout(hardTimer);
+      detachSignal?.();
+      tracker?.destroyAll();
       latch.reject(
         err(
           "RUNTIME_INIT",
@@ -288,6 +490,16 @@ export function runWithPostman(
       return;
     }
     runHandle = run;
+
+    // A signal that fired between run() and its callback would otherwise be lost.
+    if (phase === "stopping") {
+      try {
+        run.abort?.();
+      } catch {
+        /* ignore */
+      }
+      tracker?.destroyAll();
+    }
 
     run.start({
       console(_cursor: any, level: any, ...logs: unknown[]) {
@@ -345,7 +557,8 @@ export function runWithPostman(
 
       // Fires as soon as headers arrive, before the body is complete.
       responseStart(_error: any, _cursor: any, response: any) {
-        firstByteAt = Date.now();
+        if (phase === "initialized") phase = "headers";
+        firstByteAt ??= Date.now();
         const contentType = safeGetHeader(response, "content-type");
         if (
           isSseContentType(contentType) ||
@@ -361,23 +574,23 @@ export function runWithPostman(
           }),
         );
 
-        if (streaming && !streamTimer) {
-          streamTimer = setTimeout(
-            () => stopStream("maxStreamMs reached"),
-            maxStreamMs,
-          );
-          if (
-            typeof streamTimer === "object" &&
-            typeof (streamTimer as any).unref === "function"
-          ) {
-            (streamTimer as any).unref();
+        if (streaming) {
+          if (phase === "headers") phase = "streaming";
+          if (!streamTimer) {
+            streamTimer = unref(
+              setTimeout(
+                () =>
+                  stop("maxStreamMs", `maxStreamMs (${maxStreamMs}ms) reached`),
+                maxStreamMs,
+              ),
+            );
           }
         }
       },
 
       // Fires for every complete server-sent event, or for each body chunk.
       responseData(_cursor: any, data: any) {
-        if (stopRequested || data == null) return;
+        if (phase === "finalized" || data == null) return;
 
         let chunk: Buffer;
         try {
@@ -385,25 +598,32 @@ export function runWithPostman(
         } catch {
           return; // Undecodable chunk, skip rather than crash the run.
         }
+        sawResponseData = true;
         receivedBytes += chunk.length;
+
+        if (
+          maxResponseSize !== undefined &&
+          receivedBytes > maxResponseSize &&
+          phase !== "stopping"
+        ) {
+          // Feed the chunk first so the parser can still complete the event that
+          // crossed the threshold, then stop.
+          if (streaming) collectEvents(chunk);
+          stop(
+            "maxResponseSize",
+            `maxResponseSize (${maxResponseSize} bytes) exceeded`,
+          );
+          return;
+        }
 
         if (!streaming) {
           bodyChunks.push(chunk);
           return;
         }
 
-        for (const event of parser.push(chunk)) {
-          if (events.length >= maxEvents) {
-            stopStream("maxEvents reached");
-            return;
-          }
-          events.push(event);
-          safeInvoke(() => options.onEvent?.(event));
-          if (events.length >= maxEvents) {
-            stopStream("maxEvents reached");
-            return;
-          }
-        }
+        // Keep parsing while stopping: the sockets are already being torn down,
+        // and this is what lets `flush()` surface the trailing partial frame.
+        collectEvents(chunk);
       },
 
       // Fires once the request completes, including any replays.
@@ -422,8 +642,15 @@ export function runWithPostman(
           headers: headersOf(request?.headers),
           body: extractRequestBody(request),
         };
+        if (typeof response?.responseTime === "number") {
+          networkDurationMs = response.responseTime;
+        }
 
-        if (requestError) {
+        // A socket we destroyed on purpose surfaces here as ECONNRESET or
+        // ERR_STREAM_PREMATURE_CLOSE. That is a successful sample, not a failure.
+        const deliberate = phase === "stopping" || !!stopReason;
+
+        if (requestError && !deliberate) {
           captured = {
             protocol: streaming ? "sse" : "http",
             request: requestInfo,
@@ -431,13 +658,28 @@ export function runWithPostman(
               status: 0,
               statusText: "Request failed",
               headers: {},
-              timings: { startedAt, endedAt, durationMs: endedAt - startedAt },
+              timings: {
+                startedAt,
+                endedAt,
+                durationMs: endedAt - startedAt,
+                firstByteMs: firstByteAt ? firstByteAt - startedAt : undefined,
+                ...(networkDurationMs !== undefined
+                  ? { networkDurationMs }
+                  : {}),
+              },
               sizeBytes: receivedBytes,
             },
             error: toErrorInfo(requestError),
             replays,
           };
           return;
+        }
+
+        if (requestError) {
+          note(
+            "debug",
+            `[protokit] transport closed by sampler: ${toErrorInfo(requestError).message}`,
+          );
         }
 
         const contentType = safeGetHeader(response, "content-type");
@@ -449,12 +691,12 @@ export function runWithPostman(
 
         let text: string | undefined;
         let body: unknown;
+        let bodyBytes = 0;
         if (!streaming) {
           const buffer = bodyChunks.length
             ? Buffer.concat(bodyChunks)
-            : response?.stream
-              ? Buffer.from(response.stream)
-              : Buffer.alloc(0);
+            : toBuffer(response?.stream);
+          bodyBytes = buffer.length;
           // Reject binary payloads instead of producing mojibake.
           text = looksBinary(buffer) ? undefined : buffer.toString("utf8");
           body = tryParseJson(text, contentType);
@@ -472,13 +714,14 @@ export function runWithPostman(
             timings: {
               startedAt,
               endedAt,
-              durationMs:
-                typeof response?.responseTime === "number"
-                  ? response.responseTime
-                  : endedAt - startedAt,
+              // Wall-clock duration, so it can never be below firstByteMs.
+              durationMs: endedAt - startedAt,
               firstByteMs: firstByteAt ? firstByteAt - startedAt : undefined,
+              ...(networkDurationMs !== undefined ? { networkDurationMs } : {}),
             },
-            sizeBytes: receivedBytes || response?.responseSize || 0,
+            // `receivedBytes` counts body bytes only; responseSize includes
+            // headers, so it is a last resort rather than a peer value.
+            sizeBytes: sawResponseData ? receivedBytes : bodyBytes,
             ...(truncated ? { truncated: true } : {}),
           },
           cookies: Array.isArray(cookies)
@@ -506,18 +749,19 @@ export function runWithPostman(
       },
 
       exception(_cursor: any, exception: any) {
-        report.console.push({
-          level: "error",
-          messages: [`[exception] ${toErrorInfo(exception).message}`],
-          at: Date.now(),
-        });
+        note("error", `[exception] ${toErrorInfo(exception).message}`);
       },
 
       done(doneError: any) {
-        // Aborting on purpose is a normal termination for sampled streams.
-        if (doneError && !captured && !stopRequested) {
+        // Stopping on purpose is a normal termination for sampled streams.
+        const deliberate = !!stopReason || phase === "stopping";
+        if (doneError && !captured && !deliberate) {
+          phase = "finalized";
           streamTimer = safeClearTimeout(streamTimer);
           hardTimer = safeClearTimeout(hardTimer);
+          stopFuse = safeClearTimeout(stopFuse);
+          detachSignal?.();
+          tracker?.destroyAll();
           latch.reject(
             err("RUNTIME_RUN", doneError.message ?? "Run failed", doneError),
           );
@@ -528,7 +772,42 @@ export function runWithPostman(
     });
   });
 
+  /** Parse a chunk and deliver events until the cap is reached. */
+  function collectEvents(chunk: Buffer): void {
+    let produced: StreamEvent[];
+    try {
+      produced = parser.push(chunk);
+    } catch (e) {
+      note("error", `[protokit] SSE parse failure: ${toErrorInfo(e).message}`);
+      return;
+    }
+    for (const event of produced) {
+      if (events.length >= maxEvents) {
+        truncated = true;
+        stop("maxEvents", `maxEvents (${maxEvents}) reached`);
+        return;
+      }
+      events.push(event);
+      safeInvoke(() => options.onEvent?.(event));
+      if (events.length >= maxEvents) {
+        stop("maxEvents", `maxEvents (${maxEvents}) reached`);
+        return;
+      }
+    }
+  }
+
   return latch.promise;
+}
+
+function normalizePositive(value: unknown, fallback: number): number {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
+/** Respect caller-supplied agents; socket tracking is opt-out by conflict. */
+function hasUserAgents(options: SendOptions): boolean {
+  const requester = options.runner?.requester as any;
+  return !!(requester?.agents || requester?.agent);
 }
 
 /** Invoke a user callback without letting it break the run. */
@@ -537,6 +816,16 @@ function safeInvoke(fn: () => void): void {
     fn();
   } catch {
     /* User callbacks must never abort execution. */
+  }
+}
+
+function toBuffer(value: unknown): Buffer {
+  if (!value) return Buffer.alloc(0);
+  if (Buffer.isBuffer(value)) return value;
+  try {
+    return Buffer.from(value as any);
+  } catch {
+    return Buffer.alloc(0);
   }
 }
 

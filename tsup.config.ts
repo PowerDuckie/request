@@ -5,7 +5,6 @@ export default defineConfig({
     "src/index.ts",
     "src/protocols/http/index.ts",
     "src/protocols/ws/index.ts",
-    "src/openapi/index.ts",
   ],
   format: ["esm", "cjs"],
   dts: true,

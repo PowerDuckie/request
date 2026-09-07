@@ -136,7 +136,7 @@ describe("send", () => {
       expect(media["x-protokit-truncated"]).toBeUndefined();
     });
 
-    it.skip("stops at maxEvents and marks the response as truncated", async () => {
+    it("stops at maxEvents and marks the response as truncated", async () => {
       const result = await pk.send({
         spec: makeSpec(),
         target: { operationId: "endlessChat" },
@@ -155,7 +155,7 @@ describe("send", () => {
       ).toBe(true);
     }, 15000);
 
-    it.skip("stops at maxStreamMs without hanging", async () => {
+    it("stops at maxStreamMs without hanging", async () => {
       const started = Date.now();
 
       const result = await pk.send({

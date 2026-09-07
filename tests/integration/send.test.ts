@@ -112,7 +112,7 @@ describe("integration/send", () => {
       expect(media["x-protokit-truncated"]).toBeUndefined();
     });
 
-    it.skip("stops at maxEvents and flags truncation", async () => {
+    it("stops at maxEvents and flags truncation", async () => {
       const pk = createDebugger();
 
       const result = await pk.send({
@@ -133,7 +133,7 @@ describe("integration/send", () => {
       ).toBe(true);
     }, 15000);
 
-    it.skip("stops at maxStreamMs without hanging", async () => {
+    it("stops at maxStreamMs without hanging", async () => {
       const pk = createDebugger();
       const started = Date.now();
 

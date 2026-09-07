@@ -98,21 +98,24 @@ describe("buildRunOptions", () => {
     expect(runner).toEqual(snapshot);
   });
 
-  it.skip("guards against maxResponseSize: 0 on streaming requests", () => {
+  it("rejects maxResponseSize: 0", () => {
+    expect(() =>
+      buildRunOptions(
+        { spec: {}, target: {}, runner: { requester: { maxResponseSize: 0 } } },
+        { baseUrl: "http://localhost", streaming: true },
+      ),
+    ).toThrow(/maxResponseSize must be a positive number/);
+  });
+
+  it("keeps a positive maxResponseSize on streaming requests", () => {
     const options = buildRunOptions(
       {
-        runner: {
-          requester: {
-            maxResponseSize: 0,
-          },
-        },
+        spec: {},
+        target: {},
+        runner: { requester: { maxResponseSize: 1024 } },
       } as any,
-      {
-        baseUrl: "http://127.0.0.1:4000/v1",
-        streaming: true,
-      },
+      { baseUrl: "http://localhost", streaming: true },
     ) as any;
-
-    expect(options.requester.maxResponseSize).not.toBe(0);
+    expect(options.requester.maxResponseSize).toBe(1024);
   });
 });

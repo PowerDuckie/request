@@ -1,4 +1,4 @@
-import { L as LocatedOperation, a as SendOptions, E as ExecResult, P as ProtocolAdapter, A as AdapterContext } from '../../protocol-58EyJAsY.cjs';
+import { L as LocatedOperation, b as SendOptions, f as ExecuteContext, E as ExecResult, P as ProtocolAdapter, A as AdapterContext } from '../../protocol-xeNbDlvO.cjs';
 
 interface ResolvedWsConfig {
     url: string;
@@ -15,6 +15,8 @@ interface ResolvedWsConfig {
     };
     closeCode: number;
     closeReason: string;
+    /** Grace period for the peer's close frame before the socket is destroyed. */
+    closeTimeoutMs: number;
     rejectUnauthorized: boolean;
     maxPayloadBytes: number;
     clientOptions: Record<string, unknown>;
@@ -27,10 +29,14 @@ interface ResolvedWsConfig {
 declare function resolveWsConfig(located: LocatedOperation, spec: any, options: SendOptions): ResolvedWsConfig;
 
 /**
- * Open a WebSocket session, send the configured messages, and collect
- * inbound frames until a sampling limit or a close event is reached.
+ * Open a WebSocket session, send the configured messages, and collect inbound
+ * frames until a sampling limit or a close event is reached.
+ *
+ * Lifecycle: connecting -> open -> closing -> finalized. Every exit path runs
+ * through `finalize()`, which is idempotent, so a close frame racing the close
+ * watchdog cannot produce two results.
  */
-declare function runWebSocket(config: ResolvedWsConfig, options: SendOptions): Promise<ExecResult>;
+declare function runWebSocket(config: ResolvedWsConfig, options: SendOptions, ctx?: ExecuteContext): Promise<ExecResult>;
 
 interface WsPlan {
     config: ResolvedWsConfig;
@@ -47,7 +53,7 @@ declare class WebSocketAdapter implements ProtocolAdapter<WsPlan> {
     readonly name = "websocket";
     supports(ctx: AdapterContext): number;
     plan(ctx: AdapterContext): WsPlan;
-    execute(plan: WsPlan, options: SendOptions): Promise<ExecResult>;
+    execute(plan: WsPlan, options: SendOptions, ctx?: ExecuteContext): Promise<ExecResult>;
 }
 
 export { type ResolvedWsConfig, WebSocketAdapter, type WsPlan, resolveWsConfig, runWebSocket };

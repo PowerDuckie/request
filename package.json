@@ -70,7 +70,6 @@
     "@types/postman-collection": "^3.5.11",
     "@types/ws": "^8.5.13",
     "tsup": "^8.3.5",
-    "typecheck": "tsc --noEmit",
     "typescript": "^5.7.2",
     "terser": "^5.51.2",
     "vitest": "^2.1.8"
