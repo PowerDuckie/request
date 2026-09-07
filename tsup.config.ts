@@ -5,6 +5,7 @@ export default defineConfig({
     "src/index.ts",
     "src/protocols/http/index.ts",
     "src/protocols/ws/index.ts",
+    "src/protocols/grpc/index.ts",
   ],
   format: ["esm", "cjs"],
   dts: true,
@@ -15,5 +16,11 @@ export default defineConfig({
   target: "node18",
   platform: "node",
   // These carry native and dynamic requires that must not be bundled.
-  external: ["postman-runtime", "postman-collection", "ws"],
+  external: [
+    "postman-runtime",
+    "postman-collection",
+    "ws",
+    "@grpc/grpc-js",
+    "@grpc/proto-loader",
+  ],
 });

@@ -22,6 +22,11 @@
       "import": "./dist/protocols/ws/index.js",
       "require": "./dist/protocols/ws/index.cjs"
     },
+    "./grpc": {
+      "types": "./dist/protocols/grpc/index.d.ts",
+      "import": "./dist/protocols/grpc/index.js",
+      "require": "./dist/protocols/grpc/index.cjs"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -56,6 +61,9 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "@grpc/grpc-js": "^1.14.4",
+    "@grpc/proto-loader": "^0.8.1",
+    "@grpc/reflection": "^1.0.4",
     "postman-collection": "^5.3.1",
     "postman-runtime": "^7.56.1",
     "ws": "^8.21.3"
@@ -64,9 +72,9 @@
     "@types/node": "^22.10.0",
     "@types/postman-collection": "^3.5.11",
     "@types/ws": "^8.5.13",
+    "terser": "^5.51.2",
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",
-    "terser": "^5.51.2",
     "vitest": "^2.1.8"
   }
 }

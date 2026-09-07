@@ -1,0 +1,578 @@
+import {
+  DescriptorShapeError,
+  isMapEntry,
+  readEnumValueNames,
+  readFields,
+  readNestedTypes,
+  readOneofNames,
+  pick,
+  type FieldDescriptor,
+} from "./descriptor-types.js";
+import { LOADER_OPTIONS, type Catalog } from "./catalog.js";
+
+export interface OneofHint {
+  /** Dot path of the containing message; "" means the root message. */
+  at: string;
+  oneof: string;
+  /** Field names in this oneof, in declaration order. Exactly one may be set. */
+  branches: string[];
+  /** Which branch the generated template pre-fills. */
+  chosen: string;
+  /**
+   * Per-branch shape, so a UI can switch branches without re-describing the
+   * method. Values are the same proto3-JSON form the example uses.
+   */
+  branchValues: Record<string, unknown>;
+}
+
+export interface EnumHint {
+  /** Dot path of the field. */
+  at: string;
+  /** Fully-qualified enum name. */
+  enum: string;
+  values: string[];
+}
+
+export interface CollectionHint {
+  at: string;
+  kind: "repeated" | "map";
+  /** Element / value type, for UI display. */
+  of: string;
+  /** Map key type, for maps only. */
+  keyOf?: string;
+}
+
+export interface PresenceHint {
+  at: string;
+  /**
+   * Explicit-presence field: omitting it and setting it to the zero value are
+   * distinguishable on the wire, so the UI must not conflate them.
+   */
+  reason: "proto3_optional" | "message";
+  /** Whether the generated example includes this key. */
+  presentInExample: boolean;
+  /** Value to use if the user chooses to set it. */
+  valueIfSet: unknown;
+}
+
+export interface MessageTemplate {
+  /** Fully-qualified message name, no leading dot. */
+  message: string;
+  /** Editable example in proto3 JSON shape. */
+  example: Record<string, unknown>;
+  /**
+   * Which key spelling the example uses. Mirrors the loader configuration the
+   * request will actually be serialised with; editing tools should not assume.
+   */
+  keyStyle: "declared" | "json";
+  oneofs: OneofHint[];
+  enums: EnumHint[];
+  collections: CollectionHint[];
+  presence: PresenceHint[];
+  /** Truncated recursion, unresolvable types, unsupported well-known types. */
+  warnings: string[];
+}
+
+const SCALAR_DEFAULTS: Record<string, unknown> = {
+  TYPE_DOUBLE: 0,
+  TYPE_FLOAT: 0,
+  TYPE_INT32: 0,
+  TYPE_UINT32: 0,
+  TYPE_SINT32: 0,
+  TYPE_FIXED32: 0,
+  TYPE_SFIXED32: 0,
+  TYPE_BOOL: false,
+  TYPE_STRING: "",
+  TYPE_BYTES: "",
+  // 64-bit integers are strings under proto3 JSON and longs:String.
+  TYPE_INT64: "0",
+  TYPE_UINT64: "0",
+  TYPE_SINT64: "0",
+  TYPE_FIXED64: "0",
+  TYPE_SFIXED64: "0",
+};
+
+/**
+ * Well-known types whose proto3-JSON form is not a plain message.
+ *
+ * `google.protobuf.Value` is deliberately absent: its JSON form is "any JSON
+ * value", and seeding `null` would be indistinguishable from "not set" in the
+ * editor. It is reported as a warning instead.
+ */
+const WELL_KNOWN: Record<string, unknown> = {
+  "google.protobuf.Timestamp": "1970-01-01T00:00:00Z",
+  "google.protobuf.Duration": "0s",
+  "google.protobuf.Empty": {},
+  "google.protobuf.StringValue": "",
+  "google.protobuf.BoolValue": false,
+  "google.protobuf.Int32Value": 0,
+  "google.protobuf.Int64Value": "0",
+  "google.protobuf.UInt32Value": 0,
+  "google.protobuf.UInt64Value": "0",
+  "google.protobuf.DoubleValue": 0,
+  "google.protobuf.FloatValue": 0,
+  "google.protobuf.BytesValue": "",
+  "google.protobuf.FieldMask": "",
+  "google.protobuf.Struct": {},
+  "google.protobuf.ListValue": [],
+};
+
+const FREE_FORM_WELL_KNOWN = new Set([
+  "google.protobuf.Value",
+  "google.protobuf.Any",
+]);
+
+function stripDot(name: string): string {
+  return name.startsWith(".") ? name.slice(1) : name;
+}
+
+function joinPath(parent: string, child: string): string {
+  return parent ? `${parent}.${child}` : child;
+}
+
+export interface BuildTemplateOptions {
+  /** Recursion cap for self-referential or deep messages. Default 4. */
+  maxDepth?: number;
+  /**
+   * When true, repeated/map fields get one sample element so the user has
+   * something to edit. When false they start empty. Default true.
+   */
+  seedCollections?: boolean;
+  /**
+   * When true, `optional` (explicit-presence) fields are pre-filled with their
+   * zero value. Default FALSE: presence is observable on the wire, and a
+   * template that silently sets every optional field would make "omitted" the
+   * one state the user cannot reach by accident. The hints tell the UI what to
+   * offer instead.
+   */
+  fillExplicitOptional?: boolean;
+  /**
+   * When true, singular message-typed fields are pre-filled. Message fields
+   * also have explicit presence, but omitting them entirely would leave the
+   * user with nothing to expand, so the default is TRUE and the presence hint
+   * records that the key may be removed.
+   */
+  fillMessageFields?: boolean;
+}
+
+interface Ctx {
+  catalog: Catalog;
+  maxDepth: number;
+  seedCollections: boolean;
+  fillExplicitOptional: boolean;
+  fillMessageFields: boolean;
+  keyOf: (f: FieldDescriptor) => string;
+  oneofs: OneofHint[];
+  enums: EnumHint[];
+  collections: CollectionHint[];
+  presence: PresenceHint[];
+  warnings: string[];
+  /** Guards against infinite recursion on cyclic message graphs. */
+  stack: string[];
+  /** Suppresses hint recording while probing alternative oneof branches. */
+  hintDepth: number;
+}
+
+/**
+ * Key spelling must match how the request will actually be serialised.
+ *
+ * proto-loader honours `keepCase` when building codecs, so a template keyed
+ * the other way round produces requests whose fields are silently dropped —
+ * no error, no warning, just missing data. Deriving it from LOADER_OPTIONS
+ * makes the two impossible to configure apart.
+ */
+const KEY_STYLE: "declared" | "json" =
+  LOADER_OPTIONS.keepCase === true ? "declared" : "json";
+
+function keyForField(field: FieldDescriptor): string {
+  if (KEY_STYLE === "declared") return field.name;
+  return field.jsonName ?? toLowerCamel(field.name);
+}
+
+function toLowerCamel(snake: string): string {
+  return snake.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+}
+
+/**
+ * Builds an editable proto3-JSON example for a message.
+ *
+ * The shape is fixed by the descriptor and is NOT user-editable; what the user
+ * edits are the values, plus four structural choices the schema leaves open:
+ * which oneof branch is set, whether an explicit-presence field is present at
+ * all, how many elements a repeated field or map has, and (outside this
+ * function) metadata / deadline / flow control. Those four are reported as
+ * hints rather than baked into the example.
+ */
+export function buildMessageTemplate(
+  catalog: Catalog,
+  messageName: string,
+  options: BuildTemplateOptions = {},
+): MessageTemplate {
+  const ctx: Ctx = {
+    catalog,
+    maxDepth: options.maxDepth ?? 4,
+    seedCollections: options.seedCollections !== false,
+    fillExplicitOptional: options.fillExplicitOptional === true,
+    fillMessageFields: options.fillMessageFields !== false,
+    keyOf: keyForField,
+    oneofs: [],
+    enums: [],
+    collections: [],
+    presence: [],
+    warnings: [],
+    stack: [],
+    hintDepth: 0,
+  };
+
+  const fq = stripDot(messageName);
+  let example: Record<string, unknown> = {};
+  try {
+    example = buildMessage(ctx, fq, "", 0) ?? {};
+  } catch (e) {
+    if (e instanceof DescriptorShapeError) {
+      ctx.warnings.push(
+        `template generation stopped: ${e.message}. ` +
+          `The request must be composed by hand.`,
+      );
+    } else {
+      throw e;
+    }
+  }
+
+  return {
+    message: fq,
+    example,
+    keyStyle: KEY_STYLE,
+    oneofs: ctx.oneofs,
+    enums: ctx.enums,
+    collections: ctx.collections,
+    presence: ctx.presence,
+    warnings: ctx.warnings,
+  };
+}
+
+function recording(ctx: Ctx): boolean {
+  return ctx.hintDepth === 0;
+}
+
+function warn(ctx: Ctx, message: string): void {
+  if (recording(ctx)) ctx.warnings.push(message);
+}
+
+function lookupMessage(ctx: Ctx, fq: string): unknown | undefined {
+  const entry = ctx.catalog.symbols.get(fq);
+  if (entry?.kind === "message") return entry.type;
+  return undefined;
+}
+
+function lookupEnum(ctx: Ctx, fq: string): unknown | undefined {
+  const entry = ctx.catalog.symbols.get(fq);
+  if (entry?.kind === "enum") return entry.type;
+  return undefined;
+}
+
+/**
+ * Map fields are modelled in protobuf as a repeated synthetic nested message
+ * with map_entry=true.
+ *
+ * The catalog deliberately does not register map-entry types as addressable
+ * symbols, so the only way to resolve one is through the declaring message's
+ * nested types. There is no global-lookup fallback: pretending there is one
+ * would hide a catalog regression behind a second code path.
+ */
+function findMapEntry(
+  ctx: Ctx,
+  parentFq: string,
+  entryFq: string,
+): { keyType: string; valueField: FieldDescriptor } | undefined {
+  const parent = lookupMessage(ctx, parentFq);
+  if (!parent) return undefined;
+
+  const shortName = entryFq.slice(entryFq.lastIndexOf(".") + 1);
+  for (const nested of readNestedTypes(parent)) {
+    if (String(pick(nested, "name", "name") ?? "") !== shortName) continue;
+    if (!isMapEntry(nested)) continue;
+    const fields = readFields(nested);
+    const key = fields.find((f) => f.name === "key");
+    const value = fields.find((f) => f.name === "value");
+    if (key && value) return { keyType: key.type, valueField: value };
+  }
+  return undefined;
+}
+
+function buildMessage(
+  ctx: Ctx,
+  fq: string,
+  path: string,
+  depth: number,
+): Record<string, unknown> | undefined {
+  if (depth > ctx.maxDepth) {
+    warn(
+      ctx,
+      `recursion depth ${ctx.maxDepth} reached at "${path || "(root)"}" ` +
+        `(${fq}); the value is an empty message, which on the wire means ` +
+        `"set with all defaults" — remove the key to leave it unset.`,
+    );
+    return {};
+  }
+  if (ctx.stack.includes(fq)) {
+    warn(
+      ctx,
+      `cyclic reference to ${fq} at "${path}"; the value is an empty message, ` +
+        `which on the wire means "set with all defaults".`,
+    );
+    return {};
+  }
+
+  const type = lookupMessage(ctx, fq);
+  if (!type) {
+    warn(
+      ctx,
+      `message "${fq}" could not be resolved at "${path || "(root)"}"; ` +
+        `left as an empty object. The descriptor closure may be incomplete.`,
+    );
+    return {};
+  }
+
+  ctx.stack.push(fq);
+  try {
+    const fields = readFields(type);
+    const oneofNames = readOneofNames(type);
+    const out: Record<string, unknown> = {};
+
+    /** oneofIndex -> member fields, excluding synthetic proto3 optionals. */
+    const realOneofs = new Map<number, FieldDescriptor[]>();
+    for (const field of fields) {
+      if (field.oneofIndex === undefined) continue;
+      if (field.proto3Optional) continue; // synthetic wrapper, not a real oneof
+      const list = realOneofs.get(field.oneofIndex) ?? [];
+      list.push(field);
+      realOneofs.set(field.oneofIndex, list);
+    }
+
+    const handledOneofs = new Set<number>();
+
+    for (const field of fields) {
+      const key = ctx.keyOf(field);
+      const fieldPath = joinPath(path, field.name);
+
+      // --- real oneof: pre-fill one branch, describe them all ---------------
+      if (
+        field.oneofIndex !== undefined &&
+        !field.proto3Optional &&
+        realOneofs.has(field.oneofIndex)
+      ) {
+        if (handledOneofs.has(field.oneofIndex)) continue;
+        handledOneofs.add(field.oneofIndex);
+
+        const members = realOneofs.get(field.oneofIndex)!;
+        const chosen = members[0];
+
+        // Chosen branch contributes hints normally.
+        const chosenValue = buildFieldValue(
+          ctx,
+          fq,
+          chosen,
+          joinPath(path, chosen.name),
+          depth,
+        );
+
+        // Other branches are shaped for the UI but must not pollute the
+        // top-level hint lists, or a user who never switches branches sees
+        // enum/collection entries for paths that are not in the example.
+        const branchValues: Record<string, unknown> = {
+          [ctx.keyOf(chosen)]: chosenValue,
+        };
+        ctx.hintDepth++;
+        try {
+          for (const m of members.slice(1)) {
+            branchValues[ctx.keyOf(m)] = buildFieldValue(
+              ctx,
+              fq,
+              m,
+              joinPath(path, m.name),
+              depth,
+            );
+          }
+        } finally {
+          ctx.hintDepth--;
+        }
+
+        if (recording(ctx)) {
+          ctx.oneofs.push({
+            at: path,
+            oneof: oneofNames[field.oneofIndex] ?? `oneof_${field.oneofIndex}`,
+            branches: members.map((m) => m.name),
+            chosen: chosen.name,
+            branchValues,
+          });
+        }
+        out[ctx.keyOf(chosen)] = chosenValue;
+        continue;
+      }
+
+      // --- explicit presence: describe, do not silently set -----------------
+      if (field.proto3Optional) {
+        const valueIfSet = buildFieldValue(ctx, fq, field, fieldPath, depth);
+        if (recording(ctx)) {
+          ctx.presence.push({
+            at: fieldPath,
+            reason: "proto3_optional",
+            presentInExample: ctx.fillExplicitOptional,
+            valueIfSet,
+          });
+        }
+        if (ctx.fillExplicitOptional) out[key] = valueIfSet;
+        continue;
+      }
+
+      out[key] = buildFieldValue(ctx, fq, field, fieldPath, depth);
+    }
+
+    return out;
+  } finally {
+    ctx.stack.pop();
+  }
+}
+
+function buildFieldValue(
+  ctx: Ctx,
+  parentFq: string,
+  field: FieldDescriptor,
+  path: string,
+  depth: number,
+): unknown {
+  const isRepeated = field.label === "LABEL_REPEATED";
+
+  // Map field: repeated synthetic map_entry message.
+  if (isRepeated && field.type === "TYPE_MESSAGE" && field.typeName) {
+    const entryFq = stripDot(field.typeName);
+    const mapInfo = findMapEntry(ctx, parentFq, entryFq);
+    if (mapInfo) {
+      if (recording(ctx)) {
+        ctx.collections.push({
+          at: path,
+          kind: "map",
+          of: mapInfo.valueField.typeName
+            ? stripDot(mapInfo.valueField.typeName)
+            : mapInfo.valueField.type,
+          keyOf: mapInfo.keyType,
+        });
+      }
+      if (!ctx.seedCollections) return {};
+      const sampleKey = mapInfo.keyType === "TYPE_STRING" ? "key" : "0";
+      return {
+        [sampleKey]: buildSingularValue(
+          ctx,
+          parentFq,
+          mapInfo.valueField,
+          `${path}.${sampleKey}`,
+          depth,
+        ),
+      };
+    }
+    // A repeated message whose entry type resolves to nothing: treat as a
+    // plain repeated message field, but say so — silently emitting `[]` for
+    // what the user wrote as `map<...>` would be a lie about the schema.
+    warn(
+      ctx,
+      `"${path}" is a repeated ${entryFq} that could not be resolved as a ` +
+        `map entry; treating it as a repeated message field.`,
+    );
+  }
+
+  if (isRepeated) {
+    if (recording(ctx)) {
+      ctx.collections.push({
+        at: path,
+        kind: "repeated",
+        of: field.typeName ? stripDot(field.typeName) : field.type,
+      });
+    }
+    if (!ctx.seedCollections) return [];
+    return [buildSingularValue(ctx, parentFq, field, `${path}[0]`, depth)];
+  }
+
+  return buildSingularValue(ctx, parentFq, field, path, depth);
+}
+
+function buildSingularValue(
+  ctx: Ctx,
+  parentFq: string,
+  field: FieldDescriptor,
+  path: string,
+  depth: number,
+): unknown {
+  if (field.type === "TYPE_ENUM") {
+    // readFields guarantees typeName for TYPE_ENUM.
+    const fq = stripDot(field.typeName!);
+    const enumType = lookupEnum(ctx, fq);
+    let values: string[] = [];
+    if (enumType) {
+      try {
+        values = readEnumValueNames(enumType);
+      } catch (e) {
+        warn(
+          ctx,
+          `enum "${fq}" at "${path}" is unreadable: ` +
+            `${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+    if (values.length === 0) {
+      warn(
+        ctx,
+        `enum "${fq}" at "${path}" has no resolvable values; ` +
+          `the example uses an empty string, which the server will reject.`,
+      );
+      return "";
+    }
+    if (recording(ctx)) ctx.enums.push({ at: path, enum: fq, values });
+    // enums:String means the JSON form is the value name.
+    return values[0];
+  }
+
+  if (field.type === "TYPE_MESSAGE" || field.type === "TYPE_GROUP") {
+    const fq = stripDot(field.typeName!);
+
+    if (fq === "google.protobuf.Any") {
+      warn(
+        ctx,
+        `"${path}" is google.protobuf.Any; its payload is passed through ` +
+          `unmodified and is not validated against the descriptor. ` +
+          `Editing support is not available in this version.`,
+      );
+      return { "@type": "", value: {} };
+    }
+    if (FREE_FORM_WELL_KNOWN.has(fq)) {
+      warn(
+        ctx,
+        `"${path}" is ${fq}, whose JSON form is any JSON value; ` +
+          `no example can be generated without guessing. Supply it by hand.`,
+      );
+      return {};
+    }
+    if (fq in WELL_KNOWN) return WELL_KNOWN[fq];
+
+    // Message-typed fields always have explicit presence.
+    if (recording(ctx)) {
+      ctx.presence.push({
+        at: path,
+        reason: "message",
+        presentInExample: ctx.fillMessageFields,
+        valueIfSet: undefined,
+      });
+    }
+    if (!ctx.fillMessageFields) return undefined;
+    return buildMessage(ctx, fq, path, depth + 1) ?? {};
+  }
+
+  if (field.type in SCALAR_DEFAULTS) return SCALAR_DEFAULTS[field.type];
+
+  warn(
+    ctx,
+    `unhandled field type ${field.type} at "${path}"; the example uses null, ` +
+      `which will not serialise.`,
+  );
+  return null;
+}
