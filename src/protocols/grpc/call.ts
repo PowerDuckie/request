@@ -33,9 +33,27 @@ const CODE_NAMES: Record<number, string> = {
   16: "UNAUTHENTICATED",
 };
 
+const CODE_OK = 0;
 const CODE_CANCELLED = 1;
 const CODE_UNKNOWN = 2;
 const CODE_INVALID_ARGUMENT = 3;
+
+/**
+ * How long a completed unary or client-streaming call waits for the status that
+ * grpc-js is about to deliver.
+ *
+ * These two kinds signal completion through their callback, which fires before
+ * the "status" event reaches our listener. Finishing on the callback therefore
+ * discarded the real status and the trailers, and reported a locally
+ * manufactured OK in their place — see the note on `awaitingStatus`.
+ *
+ * The wait is bounded because a hang is not an acceptable substitute for a lost
+ * field: if the status never arrives the call still completes, with the
+ * response intact and a warning saying the status was synthesised. The value is
+ * generous relative to the in-process hop it covers (the status is already
+ * decoded when the callback runs) and is not a network timeout.
+ */
+const STATUS_GRACE_MS = 200;
 
 function toStatus(code: number, details?: string): GrpcStatus {
   return { code, codeName: CODE_NAMES[code] ?? `CODE_${code}`, details };
@@ -301,19 +319,31 @@ export async function grpcCall(
         `${method.kind}, which sends exactly one message.`,
     );
   }
-  if (
-    options.keepWriteOpen &&
-    method.kind === "bidi_streaming" &&
-    options.maxSessionMs === undefined &&
-    options.idleTimeoutMs === undefined &&
-    options.maxMessages === undefined &&
-    !options.signal &&
-    target.deadlineMs === undefined
-  ) {
-    warnings.push(
-      "keepWriteOpen is set with no limit and no deadline; " +
-        "the call can only end when the server closes the stream.",
-    );
+  if (options.keepWriteOpen && method.kind === "bidi_streaming") {
+    const hasClientLimit =
+      options.maxSessionMs !== undefined ||
+      options.idleTimeoutMs !== undefined ||
+      options.maxMessages !== undefined ||
+      Boolean(options.signal);
+
+    if (!hasClientLimit && target.deadlineMs === undefined) {
+      warnings.push(
+        "keepWriteOpen is set with no limit and no deadline; " +
+          "the call can only end when the server closes the stream.",
+      );
+    } else if (!hasClientLimit) {
+      // A deadline does bound the call, but it bounds it by failing: with the
+      // write side held open the client never half-closes, so unless the server
+      // ends the stream on its own the only possible outcome is
+      // DEADLINE_EXCEEDED. Worth saying, because "bounded" and "will succeed"
+      // are being conflated whenever this configuration is chosen deliberately.
+      warnings.push(
+        `keepWriteOpen is bounded only by deadlineMs (${target.deadlineMs}ms); ` +
+          `since the write side is never half-closed, the call will end in ` +
+          `DEADLINE_EXCEEDED unless the server closes the stream first. Set ` +
+          `maxMessages, idleTimeoutMs, or maxSessionMs for a clean stop.`,
+      );
+    }
   }
 
   const creds = buildCredentialsChecked(target, loaded);
@@ -365,9 +395,25 @@ export async function grpcCall(
      */
     let statusLocked = false;
     let errorLocked = false;
+    /**
+     * Set when a unary or client-streaming callback has delivered its response
+     * and the call is now waiting for the server's status.
+     *
+     * These two kinds complete through their callback, and grpc-js invokes it
+     * before the "status" event reaches a listener registered on the returned
+     * call object. The previous code finished right there, which had three
+     * consequences, all of them silent: the status was a locally manufactured
+     * `toStatus(0)` while `statusOrigin` still claimed "server"; `details` was
+     * undefined where streaming calls reported the server's "OK"; and the
+     * trailers were dropped entirely, so trailing metadata was unreachable for
+     * every unary call this library ever made. The event log also showed no
+     * status entry, asserting that none was received when one was.
+     */
+    let awaitingStatus = false;
     let idleTimer: NodeJS.Timeout | undefined;
     let sessionTimer: NodeJS.Timeout | undefined;
     let sendTimer: NodeJS.Timeout | undefined;
+    let statusGraceTimer: NodeJS.Timeout | undefined;
     let call: AnyCall | undefined;
     let abortListener: (() => void) | undefined;
 
@@ -433,10 +479,24 @@ export async function grpcCall(
         }
       }
 
+      // The response arrived but the status did not, within the grace window.
+      // Reported rather than papered over: an OK here is this library's
+      // inference from "the callback succeeded", not something the peer said.
+      if (awaitingStatus && !statusLocked) {
+        setStatus(toStatus(CODE_OK), "synthesized");
+        warnings.push(
+          `the response was received but the server's status did not arrive ` +
+            `within ${STATUS_GRACE_MS}ms; OK was inferred from the successful ` +
+            `response and no trailing metadata is available.`,
+        );
+      }
+      awaitingStatus = false;
+
       settled = true;
       clearTimeout(idleTimer);
       clearTimeout(sessionTimer);
       clearTimeout(sendTimer);
+      clearTimeout(statusGraceTimer);
       if (abortListener && options.signal) {
         options.signal.removeEventListener("abort", abortListener);
       }
@@ -453,7 +513,16 @@ export async function grpcCall(
       resolve();
     };
 
+    /**
+     * Restarts the idle clock. Called for traffic in BOTH directions.
+     *
+     * Outbound writes count as activity. They did not before, so a paced
+     * client-streaming send — sendIntervalMs above idleTimeoutMs — was killed
+     * as idle while it was actively working, and the result blamed the server
+     * for a silence the client had scheduled.
+     */
     const bumpIdle = (): void => {
+      if (settled) return;
       if (options.idleTimeoutMs === undefined) return;
       clearTimeout(idleTimer);
       idleTimer = setTimeout(
@@ -473,6 +542,22 @@ export async function grpcCall(
       ) {
         finish("max_messages");
       }
+    };
+
+    /**
+     * Holds the call open just long enough for the status grpc-js is about to
+     * deliver, for the two kinds whose callback fires first.
+     */
+    const waitForStatus = (): void => {
+      if (settled || statusLocked) {
+        finish();
+        return;
+      }
+      awaitingStatus = true;
+      // Idle timeouts must not fire during this window: the call is complete
+      // and is waiting on an in-process hop, not on the network.
+      clearTimeout(idleTimer);
+      statusGraceTimer = setTimeout(() => finish(), STATUS_GRACE_MS);
     };
 
     /**
@@ -576,11 +661,12 @@ export async function grpcCall(
           statusOrigin: "server",
           metadata: trailers,
         });
-        // Only response-streaming calls end here. For unary and client
-        // streaming the callback is the completion signal and carries the
-        // message, so finishing on the status would race it and could discard
-        // a response that had already arrived.
-        if (method.responseStream) finish();
+        // Response-streaming calls end here. So do unary and client-streaming
+        // calls that already delivered their response and were holding open for
+        // exactly this event. What must NOT happen is finishing a unary call
+        // whose callback has not run yet: the status can precede it, and that
+        // would discard a response already on its way.
+        if (method.responseStream || awaitingStatus) finish();
       });
     };
 
@@ -607,6 +693,7 @@ export async function grpcCall(
         try {
           c.write?.(payload);
           emit({ direction: "outbound", payload });
+          bumpIdle();
         } catch (e) {
           failLocally(CODE_UNKNOWN, `write of message #${at} failed`, e);
           return;
@@ -639,9 +726,10 @@ export async function grpcCall(
             (err, value) => {
               if (err) onCallError(err);
               else {
-                setStatus(toStatus(0), "server");
+                // No setStatus here: the server's own status is arriving and
+                // must win. Manufacturing OK first locked it out.
                 onInbound(value);
-                finish();
+                waitForStatus();
               }
             },
           ) as unknown as AnyCall;
@@ -662,7 +750,9 @@ export async function grpcCall(
           call.on("data", (p) => onInbound(p));
           call.on("error", onCallError);
           call.on("end", () => {
-            setStatus(toStatus(0), "server");
+            // "end" without a status is possible on an abrupt close; the status
+            // handler wins when it has already run, since setStatus locks.
+            setStatus(toStatus(CODE_OK), "synthesized");
             finish();
           });
         }
@@ -676,9 +766,8 @@ export async function grpcCall(
           (err, value) => {
             if (err) onCallError(err);
             else {
-              setStatus(toStatus(0), "server");
               onInbound(value);
-              finish();
+              waitForStatus();
             }
           },
         ) as unknown as AnyCall;
@@ -697,7 +786,7 @@ export async function grpcCall(
         call.on("data", (p) => onInbound(p));
         call.on("error", onCallError);
         call.on("end", () => {
-          setStatus(toStatus(0), "server");
+          setStatus(toStatus(CODE_OK), "synthesized");
           finish();
         });
         startWriting(call);

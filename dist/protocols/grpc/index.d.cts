@@ -259,7 +259,12 @@ interface SymbolEntry {
      * failure mode that made method lists silently empty.
      */
     type: unknown;
-    /** File the symbol was declared in, or "(unnamed)" when descriptors carry none. */
+    /**
+     * File the symbol was declared in. Unnamed descriptors get a stable synthetic
+     * label ("(unnamed #1)"), never a shared placeholder: duplicate-definition
+     * diagnostics compare these labels, and a constant would make every pair of
+     * duplicates look like the same declaration seen twice.
+     */
     file: string;
 }
 interface Catalog {
@@ -280,9 +285,8 @@ interface Catalog {
      * File names carried by the descriptors that were decoded and indexed.
      *
      * Deliberately separate from `files`: under the proto source `files` is what
-     * was found on disk, and a gap between the two is precisely the "an entire
-     * .proto's symbols are missing" failure. Reporting only one number made that
-     * gap unobservable.
+     * was found on disk. Note that the two are not always the same *kind* of
+     * name — see crossCheckFiles.
      */
     descriptorFiles: string[];
     /**
@@ -296,10 +300,10 @@ interface Catalog {
     /**
      * True when none of the decoded descriptors carried a file name.
      *
-     * protobufjs-synthesised descriptors (what @grpc/proto-loader attaches, and
-     * what many servers answer reflection with) leave FileDescriptorProto.name
-     * unset. Every diagnostic keyed on file names is meaningless then and must
-     * say so rather than report each file as missing.
+     * Diagnostic wording only. It is deliberately NOT a switch for any check:
+     * treating "names exist" as "names are comparable to paths" is what produced
+     * a confidently false coverage warning for two files whose symbols were all
+     * present.
      */
     descriptorFilesUnnamed: boolean;
 }
@@ -511,10 +515,20 @@ interface GrpcAdapterOptions {
      * budget rather than a permanent cache; 0 disables reuse entirely.
      */
     catalogTtlMs?: number;
+    /**
+     * Maximum number of cached catalogs. Default 32.
+     *
+     * A descriptor set is large, and a long-lived process pointed at many
+     * endpoints would otherwise grow this map without bound — a cache with a
+     * staleness budget but no size budget is still a leak.
+     */
+    maxCachedCatalogs?: number;
 }
 declare class GrpcAdapter {
     readonly protocol: "grpc";
     private readonly catalogTtlMs;
+    private readonly maxCachedCatalogs;
+    /** Insertion-ordered, so the oldest key is the first one Map yields. */
     private readonly catalogs;
     /** In-flight builds, so concurrent first calls dial once. */
     private readonly building;
@@ -527,10 +541,37 @@ declare class GrpcAdapter {
      */
     supports(target: unknown): boolean;
     private assertSupported;
-    /** Builds or reuses the catalog for an endpoint. */
+    /**
+     * Guards the endpoint-only entry points.
+     *
+     * These are public and are reached directly by discovery UIs, so they cannot
+     * rely on assertSupported having run — and they must not require a service or
+     * method, which is the whole point of discovery.
+     */
+    private assertEndpoint;
+    /**
+     * Builds or reuses the catalog for an endpoint.
+     *
+     * In-flight de-duplication applies even when caching is off. With
+     * catalogTtlMs: 0 the intent is "never reuse a stale catalog", not "dial the
+     * server once per concurrent caller"; the second reading would make disabling
+     * the cache a way to multiply reflection round-trips.
+     */
     catalogFor(endpoint: GrpcEndpoint): Promise<CachedCatalog>;
-    /** Drops cached descriptors, for when the server or the proto tree changed. */
+    /** Drops the oldest entries once the cache exceeds its size budget. */
+    private evict;
+    /**
+     * Drops cached descriptors, for when the server or the proto tree changed.
+     *
+     * In-flight builds are dropped too. A build already running was started
+     * against the state the caller is now declaring stale, so handing its result
+     * to the next caller would serve exactly what invalidate() was called to
+     * avoid. Callers already awaiting that promise still receive it — the
+     * alternative is rejecting a request that has done nothing wrong.
+     */
     invalidate(endpoint?: GrpcEndpoint): void;
+    /** Diagnostics about the descriptor source, reported once per endpoint. */
+    sourceNotes(endpoint: GrpcEndpoint): Promise<string[]>;
     /**
      * Produces an export bundle for one method.
      *
@@ -539,6 +580,15 @@ declare class GrpcAdapter {
      * streaming kind and message shapes exist nowhere else.
      */
     plan(target: unknown): Promise<GrpcPlan>;
+    /**
+     * Invokes the method, reusing the cached descriptor source.
+     *
+     * Passing the catalog through is not an optimisation. Left to build its own,
+     * grpcCall would re-read the proto tree or — under reflection — dial again,
+     * so plan() and run() could observe two different server states, and the
+     * runtime/descriptor cross-check inside resolveMethod would be comparing two
+     * moments instead of two views.
+     */
     run(target: unknown, options?: unknown): Promise<GrpcResult>;
     /** Not part of ProtocolAdapter; exposed for discovery UIs. */
     discover(endpoint: GrpcEndpoint): Promise<DiscoveryResult>;
@@ -546,19 +596,42 @@ declare class GrpcAdapter {
 }
 
 /**
+ * A descriptor source already built by the caller.
+ *
+ * Passing one is not merely an optimisation. Under reflection every
+ * `buildCatalog` is a fresh dial, so resolving the method again here would
+ * compare the runtime and descriptor views of two different server states —
+ * exactly the disagreement `resolveMethod` refuses to guess through. A host
+ * that already holds a catalog (GrpcAdapter does) must hand it over.
+ */
+interface GrpcCallContext {
+    catalog: Catalog;
+    packageDefinition: Record<string, unknown>;
+    /**
+     * Whether catalog-wide diagnostics belong in this call's `warnings`.
+     *
+     * Default false. A catalog note describes the descriptor source — "3 .proto
+     * files were merged", "these type references do not resolve" — and is a
+     * property of the endpoint, not of one invocation. Repeating it on every call
+     * buries the notes that are about the call, which is what turned the warning
+     * list into scrollback. Surface them once, from discover()/describeMethod().
+     */
+    includeSourceNotes?: boolean;
+}
+/**
  * Invokes one gRPC method. All four streaming kinds converge on a single event
  * log and a single set of termination conditions.
  *
  * Transport-level failures are reported in the result rather than thrown; only
- * descriptor resolution (which happens before any bytes move) throws. The two
- * are deliberately different: one is a caller mistake, the other is an
- * observation about the world.
+ * option validation and descriptor resolution — both of which happen before any
+ * bytes move — throw.
  *
- * This resolves the descriptor on every call, which means reading the proto
- * tree or dialling reflection each time. Calling it in a loop is therefore
- * wasteful — go through GrpcAdapter, whose catalog cache exists for that case.
+ * Without a `context`, this builds a descriptor source on every call, which
+ * means reading the proto tree or dialling reflection each time. Calling it in
+ * a loop that way is wasteful and, under reflection, unsound; go through
+ * GrpcAdapter, or pass the catalog yourself.
  */
-declare function grpcCall(target: GrpcTarget, options?: GrpcSendOptions): Promise<GrpcResult>;
+declare function grpcCall(target: GrpcTarget, options?: GrpcSendOptions, context?: GrpcCallContext): Promise<GrpcResult>;
 
 interface ResolvedMethod {
     /**
@@ -575,7 +648,12 @@ interface ResolvedMethod {
     responseStream: boolean;
     serialize: (value: unknown) => Buffer;
     deserialize: (buffer: Buffer) => unknown;
-    /** Fully-qualified request/response message names, when the descriptor had them. */
+    /**
+     * Fully-qualified request/response message names, when the descriptor had
+     * them. "Fully-qualified" is a promise to the caller: these are written into
+     * exported collections and quoted in client-side error messages, so a
+     * relative name here is a wrong name, not a shorter one.
+     */
     inputType?: string;
     outputType?: string;
     /** How the descriptor was obtained. */
@@ -685,7 +763,7 @@ type ReflectionVersion = "v1" | "v1alpha";
 interface ReflectionSessionOptions {
     address: string;
     credentials: _grpc_grpc_js.ChannelCredentials;
-    metadata?: Record<string, string | string[]>;
+    metadata?: Record<string, string | string[] | Buffer | Buffer[]>;
     /** Wall-clock budget for the whole session. Default 5000. */
     timeoutMs?: number;
     channelOptions?: Record<string, unknown>;
@@ -730,11 +808,6 @@ interface ReflectionOutcome {
  * Serialises files in dependency order.
  *
  * FileDescriptorSet { repeated FileDescriptorProto file = 1; }
- *
- * Map iteration order reflects the order the server happened to answer in,
- * which is not stable across runs. Sorting topologically makes the output
- * byte-for-byte reproducible and puts every file after the files it imports,
- * which is what descriptor consumers expect.
  */
 declare function serializeDescriptorSet(descriptors: Map<string, Buffer>): Buffer;
 interface ListServicesResult {
@@ -757,7 +830,14 @@ declare function listServices(options: ReflectionSessionOptions): Promise<string
 interface DescriptorSetResult {
     /** Serialised FileDescriptorSet, in dependency order. */
     descriptorSet: Buffer;
-    /** Filenames included, in the same order. */
+    /**
+     * Filenames included, in the same order as the descriptors inside
+     * `descriptorSet`.
+     *
+     * The correspondence is positional and load-bearing: `files[i]` names the
+     * i-th FileDescriptorProto in the set. Sorting this list independently — which
+     * it used to be — silently broke that pairing for anyone who relied on it.
+     */
     files: string[];
     version: ReflectionVersion;
     notes: string[];
@@ -916,7 +996,7 @@ interface LoadedGrpc {
 interface GrpcCapabilities {
     /** proto-loader >= 0.7. Required by reflection. */
     descriptorSetFromBuffer: boolean;
-    /** Version strings when readable, for diagnostics. */
+    /** Versions read from each package.json, when readable. Diagnostics only. */
     grpcVersion?: string;
     protoLoaderVersion?: string;
 }
@@ -953,6 +1033,10 @@ declare function isGrpcAvailable(): Promise<boolean>;
  * Centralised here because the loader is the only place that knows what was
  * actually loaded; probing at each call site means each new call site can
  * forget to probe.
+ *
+ * Unknown keys throw rather than pass. The previous early return made this a
+ * no-op for anything but one capability, so adding a capability and forgetting
+ * to handle it here would silently disable its check.
  */
 declare function requireCapability(loaded: LoadedGrpc, capability: keyof GrpcCapabilities): void;
 

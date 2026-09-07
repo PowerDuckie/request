@@ -408,31 +408,19 @@ function findMapEntry(
  * Oneof classification
  * ------------------------------------------------------------------ */
 
-/**
- * Recognises the synthetic oneof protoc generates for a proto3 `optional`
- * field, by structure rather than by the `proto3_optional` flag.
- *
- * The flag is the correct signal and is checked first, but it is not always
- * present: descriptors synthesised by protobufjs may omit it while still
- * emitting the wrapper oneof. When that happened, `optional string nickname`
- * was presented as a real one-branch oneof named `_nickname` and pre-filled
- * with `""` — so a user who set nothing sent an explicitly-present empty
- * string, and the server reported `had_nickname: true`. That is the exact
- * failure the "never silently set an explicit-presence field" rule exists to
- * prevent, arriving through the back door.
- *
- * The structural signature is fixed by the protobuf compiler and unambiguous: a
- * synthetic oneof contains exactly one member and is named `_` followed by that
- * member's name. A hand-written oneof cannot collide with it, because a leading
- * underscore in a oneof name is reserved for exactly this purpose.
- */
 function isSyntheticOneof(
   oneofName: string | undefined,
   members: FieldDescriptor[],
 ): boolean {
   if (members.length !== 1) return false;
-  if (oneofName === undefined) return false;
   if (members[0].label === "LABEL_REPEATED") return false;
+  // Name unknown: both signals (the proto3_optional flag and the `_x` naming
+  // convention) are missing, so the group cannot be classified on evidence.
+  // A single-member group is decided in favour of presence because the two
+  // errors are not symmetric — misreading a real oneof merely fails to
+  // pre-fill a branch, while misreading presence FABRICATES a field the user
+  // never set, and that difference is observable on the wire.
+  if (oneofName === undefined) return true;
   return oneofName === `_${members[0].name}`;
 }
 

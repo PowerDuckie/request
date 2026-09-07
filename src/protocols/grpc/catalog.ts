@@ -35,7 +35,12 @@ export interface SymbolEntry {
    * failure mode that made method lists silently empty.
    */
   type: unknown;
-  /** File the symbol was declared in, or "(unnamed)" when descriptors carry none. */
+  /**
+   * File the symbol was declared in. Unnamed descriptors get a stable synthetic
+   * label ("(unnamed #1)"), never a shared placeholder: duplicate-definition
+   * diagnostics compare these labels, and a constant would make every pair of
+   * duplicates look like the same declaration seen twice.
+   */
   file: string;
 }
 
@@ -57,9 +62,8 @@ export interface Catalog {
    * File names carried by the descriptors that were decoded and indexed.
    *
    * Deliberately separate from `files`: under the proto source `files` is what
-   * was found on disk, and a gap between the two is precisely the "an entire
-   * .proto's symbols are missing" failure. Reporting only one number made that
-   * gap unobservable.
+   * was found on disk. Note that the two are not always the same *kind* of
+   * name — see crossCheckFiles.
    */
   descriptorFiles: string[];
   /**
@@ -73,10 +77,10 @@ export interface Catalog {
   /**
    * True when none of the decoded descriptors carried a file name.
    *
-   * protobufjs-synthesised descriptors (what @grpc/proto-loader attaches, and
-   * what many servers answer reflection with) leave FileDescriptorProto.name
-   * unset. Every diagnostic keyed on file names is meaningless then and must
-   * say so rather than report each file as missing.
+   * Diagnostic wording only. It is deliberately NOT a switch for any check:
+   * treating "names exist" as "names are comparable to paths" is what produced
+   * a confidently false coverage warning for two files whose symbols were all
+   * present.
    */
   descriptorFilesUnnamed: boolean;
 }
@@ -154,11 +158,36 @@ interface IndexState {
   serviceDescriptors: Map<string, unknown>;
   mapEntries: Set<string>;
   notes: string[];
+  /** Numbers the unnamed descriptors, so their labels stay distinguishable. */
+  unnamedSeq: number;
 }
 
 function children(container: unknown, camel: string, snake: string): unknown[] {
   const raw = pick<unknown>(container, camel, snake);
   return Array.isArray(raw) ? raw : [];
+}
+
+/**
+ * Reports a redefinition unconditionally.
+ *
+ * The earlier version suppressed the note when both declarations claimed the
+ * same file, as a defence against indexing one descriptor twice. With unnamed
+ * descriptors every file compares equal, so the guard silenced every duplicate
+ * enum in the tree — the symbols were dropped in total silence. Double-indexing
+ * is a bug in this module and would be caught by its own tests; a schema
+ * conflict is the user's to see.
+ */
+function noteDuplicate(
+  state: IndexState,
+  kind: SymbolKind,
+  fq: string,
+  firstFile: string,
+  secondFile: string,
+): void {
+  state.notes.push(
+    `duplicate definition of ${kind} "${fq}" (${firstFile} and ` +
+      `${secondFile}); the first one was kept.`,
+  );
 }
 
 function registerMessage(
@@ -184,10 +213,7 @@ function registerMessage(
   } else {
     const existing = state.symbols.get(fq);
     if (existing) {
-      state.notes.push(
-        `duplicate definition of "${fq}" (${existing.file} and ${file}); ` +
-          `the first one was kept.`,
-      );
+      noteDuplicate(state, "message", fq, existing.file, file);
     } else {
       state.symbols.set(fq, { kind: "message", type: message, file });
     }
@@ -215,12 +241,7 @@ function registerEnum(
   const fq = qualify(scope, name);
   const existing = state.symbols.get(fq);
   if (existing) {
-    if (existing.file !== file) {
-      state.notes.push(
-        `duplicate definition of "${fq}" (${existing.file} and ${file}); ` +
-          `the first one was kept.`,
-      );
-    }
+    noteDuplicate(state, "enum", fq, existing.file, file);
     return;
   }
   state.symbols.set(fq, { kind: "enum", type: enumType, file });
@@ -229,7 +250,9 @@ function registerEnum(
 function indexFile(state: IndexState, fileDescriptor: DecodedFile): void {
   const rawName = pick<unknown>(fileDescriptor, "name", "name");
   const file =
-    typeof rawName === "string" && rawName !== "" ? rawName : "(unnamed)";
+    typeof rawName === "string" && rawName !== ""
+      ? rawName
+      : `(unnamed #${++state.unnamedSeq})`;
   const pkg = String(pick(fileDescriptor, "package", "package") ?? "");
 
   for (const message of children(
@@ -257,14 +280,15 @@ function indexFile(state: IndexState, fileDescriptor: DecodedFile): void {
     // assumption this layer is allowed to make.
     const existing = state.symbols.get(fq);
     if (existing) {
-      state.notes.push(
-        existing.kind === "service"
-          ? `duplicate definition of service "${fq}" ` +
-              `(${existing.file} and ${file}); the first one was kept.`
-          : `"${fq}" is declared both as a service (${file}) and as a ` +
-              `${existing.kind} (${existing.file}); the ${existing.kind} was ` +
-              `kept and the service is not callable through this catalog.`,
-      );
+      if (existing.kind === "service") {
+        noteDuplicate(state, "service", fq, existing.file, file);
+      } else {
+        state.notes.push(
+          `"${fq}" is declared both as a service (${file}) and as a ` +
+            `${existing.kind} (${existing.file}); the ${existing.kind} was ` +
+            `kept and the service is not callable through this catalog.`,
+        );
+      }
       continue;
     }
     state.symbols.set(fq, { kind: "service", type: service, file });
@@ -513,38 +537,80 @@ function decodeSet(buffers: Buffer[], notes: string[]): DecodedFile[] {
   return files;
 }
 
-/** Compares what was read from disk against what the descriptors describe. */
+/**
+ * Compares what was read from disk against what the descriptors describe.
+ *
+ * This check can only ever produce a NEGATIVE conclusion — "this .proto
+ * contributed no symbols" — and a negative conclusion requires that the
+ * evidence be comparable in the first place. It is not, in general:
+ * FileDescriptorProto.name is only an import path when protoc produced the
+ * descriptor. protobufjs (which synthesises what @grpc/proto-loader attaches)
+ * emits a name derived from the *package*, so `proto/common/types.proto`
+ * declaring `package demo.common` arrives as `demo_common.proto`. The name is
+ * present and non-empty — so no "unnamed" test can catch this — and matches
+ * nothing on disk. Suffix-matching against it reported every scanned file as
+ * missing while their symbols sat in the table, which is the worst kind of
+ * diagnostic: confidently false.
+ *
+ * So the match rate is what licenses the conclusion:
+ *   - zero matches  -> the naming scheme is not filesystem paths. Nothing can
+ *                      be concluded about coverage; say only that.
+ *   - some matches  -> the names ARE import paths (proven by the ones that
+ *                      matched), so the unmatched ones are a real gap and can
+ *                      be named.
+ *   - all matches   -> silence.
+ */
 function crossCheckFiles(
   scanned: string[],
   descriptorFiles: string[],
   unnamed: boolean,
   notes: string[],
 ): void {
-  if (unnamed) {
-    // Reporting every scanned file as "not represented" here was a false alarm
-    // repeated on every call. The absence of names is the fact worth stating,
-    // and it is a diagnostic limitation rather than a defect.
+  if (descriptorFiles.length === 0) {
     notes.push(
-      `the descriptors attached by @grpc/proto-loader carry no file names, so ` +
-        `symbols cannot be attributed to the .proto they were declared in. ` +
-        `This affects diagnostics only.`,
+      unnamed
+        ? `the descriptors attached by @grpc/proto-loader carry no file names, ` +
+            `so symbols cannot be attributed to the .proto they were declared ` +
+            `in. This affects diagnostics only.`
+        : `no descriptor file names were recovered, so symbols cannot be ` +
+            `attributed to their .proto files. This affects diagnostics only.`,
     );
     return;
   }
-  // Descriptor file names are proto-import paths ("common/types.proto"), while
-  // scanned paths are absolute. Suffix matching is the only sound comparison.
-  const missing = scanned.filter(
-    (p) =>
-      !descriptorFiles.some((d) => {
-        const normalized = p.split("\\").join("/");
-        return normalized === d || normalized.endsWith(`/${d}`);
-      }),
-  );
+
+  // Descriptor names, when genuine, are proto-import paths ("common/types.proto")
+  // while scanned paths are absolute. Suffix matching is the only sound
+  // comparison — but see above: it is only *meaningful* if something matches.
+  const matches = (abs: string): boolean => {
+    const normalized = abs.split("\\").join("/");
+    return descriptorFiles.some(
+      (d) => normalized === d || normalized.endsWith(`/${d}`),
+    );
+  };
+
+  const missing = scanned.filter((p) => !matches(p));
   if (missing.length === 0) return;
+
+  if (missing.length === scanned.length) {
+    // Not a gap: the two sides are not the same kind of name. Reported once, as
+    // a limitation, because a user who sees "0 of 2 files matched" must not be
+    // sent looking for a loading failure that did not happen.
+    notes.push(
+      `descriptor file names do not correspond to the .proto paths that were ` +
+        `scanned (descriptors report ${descriptorFiles.slice(0, 3).join(", ")}` +
+        `${descriptorFiles.length > 3 ? ", …" : ""}), so symbols cannot be ` +
+        `attributed to the file that declared them. This is how ` +
+        `protobufjs-generated descriptors name files and affects diagnostics ` +
+        `only — the symbol table itself is unaffected.`,
+    );
+    return;
+  }
+
+  // Mixed: the naming scheme is demonstrably path-based, so these are real.
   notes.push(
-    `${missing.length} scanned .proto file(s) are not represented in the ` +
-      `decoded descriptors, so nothing they declare is in the symbol table: ` +
-      `${missing.join(", ")}.`,
+    `${missing.length} of ${scanned.length} scanned .proto file(s) are not ` +
+      `represented in the decoded descriptors, so nothing they declare is in ` +
+      `the symbol table: ${missing.join(", ")}.`,
   );
 }
 
@@ -769,6 +835,7 @@ export async function buildCatalog(
     serviceDescriptors: new Map<string, unknown>(),
     mapEntries: new Set<string>(),
     notes,
+    unnamedSeq: 0,
   };
   for (const fileDescriptor of fileDescriptors) {
     indexFile(state, fileDescriptor);
@@ -780,7 +847,12 @@ export async function buildCatalog(
     const n = pick<unknown>(f, "name", "name");
     return typeof n === "string" && n !== "" ? n : undefined;
   });
-  const descriptorFilesUnnamed = rawNames.every((n) => n === undefined);
+  // Wording only. Coverage is decided by the match rate against scanned paths,
+  // not by whether names exist — see crossCheckFiles. The length guard matters
+  // because `every` is vacuously true on an empty array, which would report
+  // "no descriptor carries a name" when there were no descriptors at all.
+  const descriptorFilesUnnamed =
+    rawNames.length > 0 && rawNames.every((n) => n === undefined);
   const descriptorFiles = [
     ...new Set(rawNames.filter((n): n is string => n !== undefined)),
   ].sort();

@@ -1,4 +1,4 @@
-import { buildCatalog, type Catalog } from "./catalog.js";
+import { buildCatalog, resolveTypeName, type Catalog } from "./catalog.js";
 import {
   DescriptorShapeError,
   readMethods,
@@ -21,7 +21,12 @@ export interface ResolvedMethod {
   responseStream: boolean;
   serialize: (value: unknown) => Buffer;
   deserialize: (buffer: Buffer) => unknown;
-  /** Fully-qualified request/response message names, when the descriptor had them. */
+  /**
+   * Fully-qualified request/response message names, when the descriptor had
+   * them. "Fully-qualified" is a promise to the caller: these are written into
+   * exported collections and quoted in client-side error messages, so a
+   * relative name here is a wrong name, not a shorter one.
+   */
   inputType?: string;
   outputType?: string;
   /** How the descriptor was obtained. */
@@ -56,6 +61,73 @@ function stripDot(name: string): string {
   return name.startsWith(".") ? name.slice(1) : name;
 }
 
+/**
+ * Scope a method's type references resolve in.
+ *
+ * A service cannot be nested, so its enclosing scope is exactly the file's
+ * package — recoverable from the fully-qualified name without consulting the
+ * file descriptor again.
+ */
+function packageOf(fqService: string): string {
+  const i = fqService.lastIndexOf(".");
+  return i > 0 ? fqService.slice(0, i) : "";
+}
+
+/**
+ * Normalises whatever resolveTypeName returns to a fully-qualified name.
+ *
+ * The resolver reports more than a name (it also distinguishes "this is a map
+ * entry" from "this type is absent", which template.ts needs), and this call
+ * site only wants the name. Accepting either shape keeps the two from having to
+ * change together for a field neither of them disagrees about.
+ */
+function resolvedName(result: unknown): string | undefined {
+  if (typeof result === "string") return result || undefined;
+  const name = (result as { name?: unknown } | undefined)?.name;
+  return typeof name === "string" && name ? name : undefined;
+}
+
+/**
+ * Resolves one type reference from a method signature.
+ *
+ * Falls back to the reference as written, because a wrong-looking type name is
+ * strictly better than refusing a call that is otherwise fully equipped to
+ * succeed — the codecs come from the runtime view and do not depend on this.
+ * The fallback is always announced: a name that silently stops being
+ * fully-qualified is the failure this function exists to prevent.
+ */
+function resolveSignatureType(
+  catalog: Catalog,
+  scope: string,
+  ref: string,
+  what: string,
+  notes: string[],
+): string {
+  const literal = stripDot(ref);
+  let resolved: string | undefined;
+  try {
+    resolved = resolvedName(resolveTypeName(catalog, scope, ref));
+  } catch (e) {
+    notes.push(
+      `resolving the ${what} type "${ref}" failed: ` +
+        `${e instanceof Error ? e.message : String(e)}. ` +
+        `The name is reported as written.`,
+    );
+    return literal;
+  }
+  if (resolved) return resolved;
+
+  notes.push(
+    ref.startsWith(".")
+      ? `the ${what} type "${literal}" is not in the symbol table; the ` +
+          `descriptor closure is incomplete. The name is reported as written.`
+      : `the ${what} type "${ref}" is a relative reference that could not be ` +
+          `resolved in scope "${scope || "(root)"}"; it is reported as ` +
+          `written and is therefore not fully qualified.`,
+  );
+  return literal;
+}
+
 /** The subset of proto-loader's MethodDefinition this module relies on. */
 interface RuntimeMethod {
   path: string;
@@ -77,6 +149,7 @@ function isRuntimeMethod(value: unknown): value is RuntimeMethod {
   const m = value as Partial<RuntimeMethod>;
   return (
     typeof m.path === "string" &&
+    m.path.length > 0 &&
     typeof m.requestStream === "boolean" &&
     typeof m.responseStream === "boolean" &&
     typeof m.requestSerialize === "function" &&
@@ -103,17 +176,20 @@ function collapseRuntimeMethods(
   serviceDef: Record<string, unknown>,
 ): Map<string, RuntimeMethod> {
   const out = new Map<string, RuntimeMethod>();
-  const chosenKey = new Map<string, string>();
+  /** Wire names for which the entry kept was reached under its declared key. */
+  const canonical = new Set<string>();
 
-  for (const [key, raw] of Object.entries(serviceDef)) {
+  for (const key of Object.keys(serviceDef)) {
+    if (!Object.prototype.hasOwnProperty.call(serviceDef, key)) continue;
+    const raw = serviceDef[key];
     if (!isRuntimeMethod(raw)) continue;
     const wireName = methodNameFromPath(raw.path);
-    // Keep the entry whose key matches the wire name, so diagnostics quote the
-    // declared spelling rather than the camelCase alias.
-    if (!out.has(wireName) || chosenKey.get(wireName) !== wireName) {
-      out.set(wireName, raw);
-      chosenKey.set(wireName, key);
-    }
+    // Prefer the entry whose key matches the wire name, so diagnostics quote the
+    // declared spelling rather than the camelCase alias. Once such an entry has
+    // been seen it is never replaced; before that, any entry is better than none.
+    if (canonical.has(wireName)) continue;
+    out.set(wireName, raw);
+    if (key === wireName) canonical.add(wireName);
   }
   return out;
 }
@@ -135,6 +211,32 @@ function matchName(
   const candidates = names.filter((n) => n.toLowerCase() === lowered);
   if (candidates.length === 1) return { name: candidates[0], exact: false };
   return undefined;
+}
+
+/**
+ * Validates the two fields this module indexes with.
+ *
+ * Both are used as object keys and as inputs to string methods, so a non-string
+ * either throws somewhere unrelated or — for "__proto__" — looks up something
+ * that exists and is not a service. Neither failure names the caller's mistake,
+ * which is the only thing worth reporting before any bytes move.
+ */
+function assertTargetShape(target: GrpcTarget): void {
+  const required = [
+    "address",
+    "service",
+    "method",
+  ] as const satisfies readonly (keyof GrpcTarget)[];
+
+  for (const field of required) {
+    const value: unknown = target[field];
+    if (typeof value !== "string" || value.length === 0) {
+      throw new TypeError(
+        `GrpcTarget.${field} must be a non-empty string; received ` +
+          `${value === undefined ? "undefined" : typeof value}.`,
+      );
+    }
+  }
 }
 
 /**
@@ -194,6 +296,19 @@ export async function resolveMethod(
   target: GrpcTarget,
   options?: ResolveMethodOptions,
 ): Promise<ResolvedMethod> {
+  assertTargetShape(target);
+
+  if (options) {
+    // Half a context is worse than none: it would silently pair a cached
+    // catalog with a freshly built package definition.
+    if (!options.catalog || !options.packageDefinition) {
+      throw new TypeError(
+        "ResolveMethodOptions requires both catalog and packageDefinition, " +
+          "from the same buildCatalog call.",
+      );
+    }
+  }
+
   const { catalog, packageDefinition } =
     options ?? (await buildCatalog(target));
 
@@ -201,7 +316,16 @@ export async function resolveMethod(
 
   /* ---- runtime view: codecs and path ---------------------------- */
 
-  const serviceDef = packageDefinition[target.service];
+  // hasOwnProperty, not a bare index: "__proto__" and "constructor" resolve
+  // through the prototype chain, and Object.prototype passes an "is it an
+  // object" guard. That reported a nonexistent service as one with no methods.
+  const serviceDef = Object.prototype.hasOwnProperty.call(
+    packageDefinition,
+    target.service,
+  )
+    ? packageDefinition[target.service]
+    : undefined;
+
   if (!serviceDef || typeof serviceDef !== "object") {
     const known = new Set([...catalog.invocableServices, ...catalog.services]);
     const hint = catalog.services.includes(target.service)
@@ -289,16 +413,41 @@ export async function resolveMethod(
     );
   }
 
+  /* ---- type names, resolved in the service's scope -------------- */
+
+  const scope = packageOf(target.service);
+  const inputType = described
+    ? resolveSignatureType(
+        catalog,
+        scope,
+        described.inputType,
+        "request",
+        notes,
+      )
+    : undefined;
+  const outputType = described
+    ? resolveSignatureType(
+        catalog,
+        scope,
+        described.outputType,
+        "response",
+        notes,
+      )
+    : undefined;
+
   return {
     name: matched.name,
     kind: kindOf(requestStream, responseStream),
     path: runtime.path,
     requestStream,
     responseStream,
-    serialize: runtime.requestSerialize,
-    deserialize: runtime.responseDeserialize,
-    inputType: described ? stripDot(described.inputType) : undefined,
-    outputType: described ? stripDot(described.outputType) : undefined,
+    // Wrapped rather than detached: proto-loader currently generates closures
+    // that ignore their receiver, but that is an implementation detail and
+    // keeping it costs nothing.
+    serialize: (value) => runtime.requestSerialize(value),
+    deserialize: (buffer) => runtime.responseDeserialize(buffer),
+    inputType,
+    outputType,
     source: catalog.source,
     notes,
   };
