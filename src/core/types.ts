@@ -378,6 +378,7 @@ export interface WebSocketOptions {
   rejectUnauthorized?: boolean;
   /** Cap on retained payload size per frame, in bytes. */
   maxPayloadBytes?: number;
+  handshakeTimeoutMs?: number;
 }
 
 /** GraphQL-specific execution options. */
@@ -439,6 +440,22 @@ export interface StreamParserOptions {
   inheritEventId?: boolean;
 }
 
+
+export interface ManualMessage {
+  data: unknown;
+  delayMs?: number;
+}
+
+export interface ManualSession {
+  protocol: "websocket" | "mcp" | "grpc";
+  open(): Promise<void>;
+  send(message: unknown, options?: { delayMs?: number }): Promise<void>;
+  close(options?: { code?: number; reason?: string }): Promise<void>;
+  waitForClose(): Promise<void>;
+  readonly events: StreamEvent[];
+  readonly state: "connecting" | "open" | "closing" | "closed";
+}
+
 export interface SendOptions extends StreamParserOptions {
   /** The complete OpenAPI 3.2 document. */
   spec: OpenApiDocument;
@@ -464,6 +481,8 @@ export interface SendOptions extends StreamParserOptions {
   graphql?: GraphQLOptions;
   /** MCP options, used by the mcp adapter. */
   mcp?: McpOptions;
+  /** gRPC options, used by the gRPC adapter. */
+  grpc?: any;
 
   /** Convenience shortcut, equivalent to runner.timeout.request. */
   timeout?: number;

@@ -27,6 +27,16 @@
       "import": "./dist/protocols/grpc/index.js",
       "require": "./dist/protocols/grpc/index.cjs"
     },
+    "./mcp": {
+      "types": "./dist/protocols/mcp/index.d.ts",
+      "import": "./dist/protocols/mcp/index.js",
+      "require": "./dist/protocols/mcp/index.cjs"
+    },
+    "./graphql": {
+      "types": "./dist/protocols/graphql/index.d.ts",
+      "import": "./dist/protocols/graphql/index.js",
+      "require": "./dist/protocols/graphql/index.cjs"
+    },
     "./package.json": "./package.json"
   },
   "files": [

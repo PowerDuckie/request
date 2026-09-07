@@ -28,7 +28,9 @@
       "require": "./dist/protocols/mcp/index.cjs"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
     "dev:http_ws:server": "node examples/http_ws/local-server.mjs",
@@ -38,7 +40,11 @@
     "dev:mcp:server": "node examples/mcp/server.mjs",
     "dev:mcp:demo": "node examples/mcp/demo.mjs",
     "dev:grpc:server": "node examples/grpc/server.mjs",
-    "dev:grpc:demo": "node examples/grpc/client.mjs"
+    "dev:grpc:demo": "node examples/grpc/client.mjs",
+    "dev:grpc:openapi": "node examples/grpc/openapi-demo.mjs",
+    "dev:ws:manual": "node examples/ws/manual-demo.mjs",
+    "dev:mcp:manual": "node examples/mcp/manual-demo.mjs",
+    "test": "node tests/protocols.test.mjs"
   },
   "dependencies": {
     "postman-collection": "^4.4.0",
@@ -51,9 +57,15 @@
     "@grpc/reflection": "^1.0.0"
   },
   "peerDependenciesMeta": {
-    "@grpc/grpc-js": { "optional": true },
-    "@grpc/proto-loader": { "optional": true },
-    "@grpc/reflection": { "optional": true }
+    "@grpc/grpc-js": {
+      "optional": true
+    },
+    "@grpc/proto-loader": {
+      "optional": true
+    },
+    "@grpc/reflection": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

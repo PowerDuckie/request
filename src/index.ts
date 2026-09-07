@@ -4,6 +4,7 @@ import { HttpAdapter } from "./protocols/http";
 import { WebSocketAdapter } from "./protocols/ws";
 import { GraphQLAdapter } from "./protocols/graphql";
 import { McpAdapter } from "./protocols/mcp";
+import { GrpcProtocolAdapter } from "./protocols/grpc/openapi";
 import { locateOperation, type LocatedOperation } from "./openapi/locate";
 import {
   toResponseObject,
@@ -69,6 +70,7 @@ export type {
 } from "./protocols/graphql/writeback";
 
 export { McpAdapter } from "./protocols/mcp";
+export { GrpcProtocolAdapter, writeGrpcOperations, discoverAndWriteGrpcOperations, grpcManualSession, mcpManualSession, wsManualSession } from "./protocols/grpc/openapi";
 export { resolveMcpConfig } from "./protocols/mcp/config";
 export {
   initializeSession as initializeMcpSession,
@@ -134,6 +136,7 @@ export function createDebugger(config: DebuggerOptions = {}) {
     new WebSocketAdapter(),
     new GraphQLAdapter(),
     new McpAdapter(),
+    new GrpcProtocolAdapter(),
   ];
   for (const adapter of [...base, ...(config.extraAdapters ?? [])])
     registry.register(adapter);

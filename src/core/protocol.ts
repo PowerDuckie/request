@@ -1,4 +1,4 @@
-import type { SendOptions, ExecResult } from "./types";
+import type { SendOptions, ExecResult, ProtocolName } from "./types";
 import type { LocatedOperation } from "../openapi/locate";
 
 export interface AdapterContext {
@@ -49,4 +49,18 @@ export interface ProtocolAdapter<TPlan = unknown> {
 
   /** Optional cleanup for adapters holding process-wide resources. */
   dispose?(): void | Promise<void>;
+}
+
+export interface SessionProtocolAdapter<TPlan, TSession> {
+  readonly name: ProtocolName;
+
+  supports(ctx: AdapterContext): number;
+
+  plan(ctx: AdapterContext): TPlan;
+
+  createSession(
+    plan: TPlan,
+    options: SendOptions,
+    ctx?: ExecuteContext,
+  ): TSession;
 }

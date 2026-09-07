@@ -25,7 +25,9 @@ export async function runMcp(
   const replays: ReplayRecord[] = [];
 
   let sessionId = config.sessionId;
-  let protocolVersion: string | undefined = config.sessionId ? MCP_PROTOCOL_VERSION : undefined;
+  let protocolVersion: string | undefined = config.sessionId
+    ? MCP_PROTOCOL_VERSION
+    : undefined;
 
   if (!sessionId) {
     try {
@@ -36,12 +38,22 @@ export async function runMcp(
       });
       sessionId = session.sessionId;
       protocolVersion = session.protocolVersion;
-      replays.push({ url: config.endpoint, method: "initialize", status: 200, reason: "mcp-handshake" });
+      replays.push({
+        url: config.endpoint,
+        method: "initialize",
+        status: 200,
+        reason: "mcp-handshake",
+      });
     } catch (e) {
       const endedAt = Date.now();
       return {
         protocol: "mcp",
-        request: { method: "POST", url: config.endpoint, headers: config.headers, body: { method: "initialize" } },
+        request: {
+          method: "POST",
+          url: config.endpoint,
+          headers: config.headers,
+          body: { method: "initialize" },
+        },
         response: {
           status: 0,
           statusText: "Handshake failed",
@@ -55,9 +67,17 @@ export async function runMcp(
     }
   }
 
-  const headers = { ...config.headers, ...(sessionId ? { "Mcp-Session-Id": sessionId } : {}) };
+  const headers = {
+    ...config.headers,
+    ...(sessionId ? { "Mcp-Session-Id": sessionId } : {}),
+  };
   const requestId = nextRequestId();
-  const requestBody = { jsonrpc: "2.0" as const, id: requestId, method: config.method, params: config.params };
+  const requestBody = {
+    jsonrpc: "2.0" as const,
+    id: requestId,
+    method: config.method,
+    params: config.params,
+  };
 
   let outcome: Awaited<ReturnType<typeof sendJsonRpc>>;
   try {
@@ -71,7 +91,12 @@ export async function runMcp(
     const endedAt = Date.now();
     return {
       protocol: "mcp",
-      request: { method: "POST", url: config.endpoint, headers, body: requestBody },
+      request: {
+        method: "POST",
+        url: config.endpoint,
+        headers,
+        body: requestBody,
+      },
       response: {
         status: 0,
         statusText: "Request failed",
@@ -85,12 +110,19 @@ export async function runMcp(
   }
 
   const endedAt = Date.now();
-  const rpcError = isJsonRpcError(outcome.message) ? outcome.message.error : undefined;
+  const rpcError = isJsonRpcError(outcome.message)
+    ? outcome.message.error
+    : undefined;
   const body = rpcError ? undefined : outcome.message?.result;
 
   return {
     protocol: "mcp",
-    request: { method: "POST", url: config.endpoint, headers, body: requestBody },
+    request: {
+      method: "POST",
+      url: config.endpoint,
+      headers,
+      body: requestBody,
+    },
     response: {
       status: outcome.status,
       statusText: outcome.statusText,
@@ -109,7 +141,12 @@ export async function runMcp(
     ...(rpcError
       ? { error: { message: rpcError.message, code: String(rpcError.code) } }
       : outcome.message === undefined && outcome.status >= 400
-        ? { error: { message: `MCP endpoint responded HTTP ${outcome.status}`, code: String(outcome.status) } }
+        ? {
+            error: {
+              message: `MCP endpoint responded HTTP ${outcome.status}`,
+              code: String(outcome.status),
+            },
+          }
         : {}),
     replays,
   };
