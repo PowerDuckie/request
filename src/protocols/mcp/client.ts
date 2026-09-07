@@ -2,7 +2,7 @@ import type { ExecResult, ReplayRecord, SendOptions } from "../../core/types";
 import type { ExecuteContext } from "../../core/protocol";
 import { toErrorInfo } from "../../core/errors";
 import { sendJsonRpc, nextRequestId, isJsonRpcError } from "./jsonrpc";
-import { initializeSession, MCP_PROTOCOL_VERSION } from "./discovery";
+import { initializeSession } from "./discovery";
 import type { ResolvedMcpConfig } from "./config";
 
 /**
@@ -25,9 +25,10 @@ export async function runMcp(
   const replays: ReplayRecord[] = [];
 
   let sessionId = config.sessionId;
-  let protocolVersion: string | undefined = config.sessionId
-    ? MCP_PROTOCOL_VERSION
-    : undefined;
+  // Never guess a version we did not negotiate: when a caller reuses an
+  // external session without telling us the version, omit the header and let
+  // the server apply its own default.
+  let protocolVersion: string | undefined = config.protocolVersion;
 
   if (!sessionId) {
     try {

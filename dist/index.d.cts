@@ -1,9 +1,9 @@
-import { P as ProtocolAdapter, A as AdapterContext, E as ExecResult, J as Json, S as ScriptSource, a as SendOptions, b as ExecuteContext, c as ProtocolName, L as LocatedOperation, O as OperationTarget, d as SendResult } from './protocol-CIkq_Kwt.cjs';
-export { e as AssertionResult, f as AuthConfig, C as ConsoleLog, G as GraphQLOptions, M as ManualMessage, g as ManualSession, h as McpOptions, i as OpenApiDocument, R as ReplayRecord, j as RequestValues, k as RequesterOptions, l as RuntimeRunOptions, m as ScriptConfig, n as ScriptOutcome, o as ScriptReport, p as StopReason, q as StreamEvent, r as StreamParserOptions, W as WebSocketOptions, s as locateOperation } from './protocol-CIkq_Kwt.cjs';
+import { P as ProtocolAdapter, A as AdapterContext, E as ExecResult, J as Json, S as ScriptSource, a as SendOptions, b as ExecuteContext, c as ProtocolName, L as LocatedOperation, O as OperationTarget, d as SendResult } from './protocol-C1fL6J7c.cjs';
+export { e as AssertionResult, f as AuthConfig, C as ConsoleLog, G as GraphQLOptions, M as ManualMessage, g as ManualSession, h as McpOptions, i as OpenApiDocument, R as ReplayRecord, j as RequestValues, k as RequesterOptions, l as RuntimeRunOptions, m as ScriptConfig, n as ScriptOutcome, o as ScriptReport, p as StopReason, q as StreamEvent, r as StreamParserOptions, W as WebSocketOptions, s as locateOperation } from './protocol-C1fL6J7c.cjs';
 export { HttpAdapter, SseParser } from './protocols/http/index.cjs';
 export { CreateWsManualSessionOptions, WebSocketAdapter, WebSocketSessionEvent, WebSocketSessionState, WsManualSession, WsSendOptions, createWsManualSession, createWsManualSession as runWebSocketSession, createWsManualSession as wsManualSession } from './protocols/ws/index.cjs';
 export { DiscoverAndWriteResult as DiscoverAndWriteGraphQLResult, GeneratedOperation, GraphQLAdapter, GraphQLArg, GraphQLFieldInfo, GraphQLNamedType, GraphQLTypeRef, INTROSPECTION_QUERY, IntrospectedSchema, IntrospectionResult, WriteGraphQLOptions, discoverAndWriteGraphQLSchema, generateAllOperations, generateOperation, introspectSchema, resolveGraphQLConfig, writeGraphQLOperations } from './protocols/graphql/index.cjs';
-export { DiscoverAndWriteMcpResult, GeneratedMcpCall, MCP_PROTOCOL_VERSION, McpAdapter, McpCapability, McpDiscoveryResult, McpPrompt, McpResource, McpTool, WriteMcpOptions, discoverAndWriteMcpCapabilities, discoverMcpCapabilities, generateAllMcpCalls, generateMcpCall, initializeSession as initializeMcpSession, resolveMcpConfig, writeMcpOperations } from './protocols/mcp/index.cjs';
+export { D as DiscoverAndWriteMcpResult, G as GeneratedMcpCall, I as InitializeMcpSessionInit, M as MCP_PROTOCOL_VERSION, a as McpAdapter, b as McpCapability, c as McpDiscoveryResult, d as McpPrompt, e as McpResource, f as McpTool, R as ResolvedMcpConfig, W as WriteMcpOptions, g as discoverAndWriteMcpCapabilities, h as discoverMcpCapabilities, i as generateAllMcpCalls, j as generateMcpCall, k as initializeMcpSession, r as resolveMcpConfig, w as writeMcpOperations } from './index-CAhs2pEg.cjs';
 import { G as GrpcTarget, a as GrpcEndpoint, D as DiscoveryResult } from './discovery-BB4VjHB7.cjs';
 export { b as GrpcDiscoveredMethod, c as GrpcDiscoveredService, d as discoverGrpc, d as grpcDiscover } from './discovery-BB4VjHB7.cjs';
 
@@ -173,24 +173,89 @@ interface JsonRpcOutcome {
     firstByteMs: number;
 }
 
-declare function runMcpManualSession(config: {
+type McpSessionState = "idle" | "opening" | "open" | "closing" | "closed";
+interface McpSessionEvent {
+    direction: "in" | "out" | "meta";
+    at: number;
+    event: "session" | "jsonrpc" | "notification" | "error" | "lifecycle";
+    /** JSON text of `parsed`, or undefined when there was no body (202/204). */
+    data?: string;
+    parsed?: unknown;
+}
+interface McpManualSessionOptions {
     endpoint: string;
     headers?: Record<string, string>;
     clientInfo?: {
         name: string;
         version: string;
     };
-}): {
-    readonly events: any[];
-    readonly state: "connecting" | "open" | "closing" | "closed";
+    /** Client capabilities advertised at initialize. Default: {}. */
+    capabilities?: Record<string, unknown>;
+    /** Per-request timeout in ms. 0/undefined disables. Default 30_000. */
+    timeoutMs?: number;
+    /** Aborts the whole session (open, in-flight sends, close). */
+    signal?: AbortSignal;
+    /** Ring-buffer cap for `events`. Default 1000. 0 = unbounded. */
+    maxEvents?: number;
+    /** Redact secret-looking values in recorded events. Default true. */
+    redactSecrets?: boolean;
+    /**
+     * Issue list calls one at a time. Needed only for servers that cannot
+     * handle concurrent requests on one session. Default false.
+     */
+    serialize?: boolean;
+}
+interface McpRequestOptions {
+    delayMs?: number;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    /** Return the raw outcome instead of throwing on JSON-RPC errors. */
+    raw?: boolean;
+}
+interface McpListing<T> {
+    items: T[];
+    pages: number;
+}
+/** How a session-termination DELETE was answered. */
+type McpTerminateOutcome = "released" | "unsupported" | "already-gone" | "failed";
+interface McpManualSession {
+    readonly state: McpSessionState;
     readonly sessionId: string | undefined;
+    readonly protocolVersion: string | undefined;
+    readonly serverInfo: {
+        name: string;
+        version: string;
+    } | undefined;
+    readonly events: readonly McpSessionEvent[];
     open(): Promise<void>;
-    send(message: unknown, options?: {
-        delayMs?: number;
-    }): Promise<JsonRpcOutcome>;
+    request<T = any>(method: string, params?: unknown, options?: McpRequestOptions): Promise<T>;
+    send(message: unknown, options?: McpRequestOptions): Promise<JsonRpcOutcome>;
+    notify(method: string, params?: unknown, options?: McpRequestOptions): Promise<void>;
+    ping(options?: McpRequestOptions): Promise<void>;
+    listTools(options?: McpRequestOptions): Promise<McpListing<any>>;
+    listPrompts(options?: McpRequestOptions): Promise<McpListing<any>>;
+    listResources(options?: McpRequestOptions): Promise<McpListing<any>>;
+    listResourceTemplates(options?: McpRequestOptions): Promise<McpListing<any>>;
+    /** Concrete resources + templates, merged. */
+    listSources(options?: McpRequestOptions): Promise<McpListing<any>>;
+    callTool(name: string, args?: Record<string, unknown>, options?: McpRequestOptions): Promise<any>;
+    getPrompt(name: string, args?: Record<string, unknown>, options?: McpRequestOptions): Promise<any>;
+    readResource(uri: string, options?: McpRequestOptions): Promise<any>;
     close(): Promise<void>;
     waitForClose(): Promise<void>;
-};
+    [Symbol.asyncDispose]?: () => Promise<void>;
+}
+/**
+ * Long-lived, stateful MCP session over Streamable HTTP.
+ *
+ * Unlike `runMcp()` — which is one self-contained sample with its own
+ * handshake — this keeps a single negotiated session open so a caller can
+ * drive `initialize -> list -> call -> DELETE` by hand, mirroring
+ * `createWsManualSession` and `createGrpcManualSession`.
+ */
+declare function createMcpManualSession(options: McpManualSessionOptions): McpManualSession;
+/** @deprecated Use {@link createMcpManualSession}. */
+declare const runMcpManualSession: typeof createMcpManualSession;
 
 interface WriteGrpcOptions {
     pathPrefix?: string;
@@ -296,20 +361,22 @@ interface PlanResult {
     warnings?: string[];
     plan: unknown;
 }
+interface SendManyFailure {
+    target: OperationTarget;
+    error: string;
+}
+interface SendManyResult {
+    spec: any;
+    results: Array<SendResult | SendManyFailure>;
+}
 declare function createDebugger(config?: DebuggerOptions): {
     registry: AdapterRegistry;
     toCollection: (spec: any, target: OperationTarget, overrides?: Partial<Omit<SendOptions, "spec" | "target">>) => PlanResult;
     send: (options: SendOptions) => Promise<SendResult>;
     sendMany: (spec: any, targets: Array<{
         target: OperationTarget;
-    } & Partial<Omit<SendOptions, "spec" | "target">>>, shared?: Partial<Omit<SendOptions, "spec" | "target">>) => Promise<{
-        spec: any;
-        results: Array<SendResult | {
-            target: OperationTarget;
-            error: string;
-        }>;
-    }>;
+    } & Partial<Omit<SendOptions, "spec" | "target">>>, shared?: Partial<Omit<SendOptions, "spec" | "target">>) => Promise<SendManyResult>;
 };
 type ProtoKit = ReturnType<typeof createDebugger>;
 
-export { AdapterContext, AdapterRegistry, BUILTIN_CAPTURE_TEST, type DebuggerOptions, ExecResult, ExecuteContext, DiscoveryResult as GrpcDiscoveryResult, type GrpcManualSession, type GrpcManualSessionEvent, type GrpcManualSessionState, type GrpcManualSessionTarget, GrpcProtocolAdapter, Json, LocatedOperation, OperationTarget, type PlanResult, type ProtoKit, ProtoKitError, ProtocolAdapter, ProtocolName, ScriptSource, SendOptions, SendResult, type ToResponseOptions, type WriteBackOptions, createDebugger, createGrpcManualSession, discoverAndWriteGrpcOperations, createGrpcManualSession as grpcManualSession, inferSchema, inferSchemaFromMany, runMcpManualSession as mcpManualSession, mergeSchema, runMcpManualSession, sampleFromSchema, toResponseObject, writeBackResponse, writeGrpcOperations };
+export { AdapterContext, AdapterRegistry, BUILTIN_CAPTURE_TEST, type DebuggerOptions, ExecResult, ExecuteContext, DiscoveryResult as GrpcDiscoveryResult, type GrpcManualSession, type GrpcManualSessionEvent, type GrpcManualSessionState, type GrpcManualSessionTarget, GrpcProtocolAdapter, Json, LocatedOperation, type McpListing, type McpManualSession, type McpManualSessionOptions, type McpRequestOptions, type McpSessionEvent, type McpSessionState, type McpTerminateOutcome, OperationTarget, type PlanResult, type ProtoKit, ProtoKitError, ProtocolAdapter, ProtocolName, ScriptSource, type SendManyFailure, type SendManyResult, SendOptions, SendResult, type ToResponseOptions, type WriteBackOptions, createDebugger, createGrpcManualSession, createMcpManualSession, discoverAndWriteGrpcOperations, createGrpcManualSession as grpcManualSession, inferSchema, inferSchemaFromMany, createMcpManualSession as mcpManualSession, mergeSchema, runMcpManualSession, sampleFromSchema, toResponseObject, writeBackResponse, writeGrpcOperations };

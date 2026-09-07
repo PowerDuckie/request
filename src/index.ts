@@ -43,9 +43,17 @@ export { toResponseObject, writeBackResponse } from "./openapi/writeback";
 
 export type { WriteBackOptions, ToResponseOptions } from "./openapi/writeback";
 
+/* ------------------------------------------------------------------ *
+ * HTTP
+ * ------------------------------------------------------------------ */
+
 export { HttpAdapter } from "./protocols/http";
 export { BUILTIN_CAPTURE_TEST } from "./protocols/http/scripts";
 export { SseParser } from "./protocols/http/sse-parser";
+
+/* ------------------------------------------------------------------ *
+ * WebSocket
+ * ------------------------------------------------------------------ */
 
 export {
   WebSocketAdapter,
@@ -61,6 +69,10 @@ export type {
   WsManualSession,
   WsSendOptions,
 } from "./protocols/ws";
+
+/* ------------------------------------------------------------------ *
+ * GraphQL
+ * ------------------------------------------------------------------ */
 
 export { GraphQLAdapter } from "./protocols/graphql";
 export { resolveGraphQLConfig } from "./protocols/graphql/config";
@@ -96,14 +108,36 @@ export type {
   DiscoverAndWriteResult as DiscoverAndWriteGraphQLResult,
 } from "./protocols/graphql/writeback";
 
+/* ------------------------------------------------------------------ *
+ * MCP
+ *
+ * `createMcpManualSession` is the canonical name, matching
+ * `createWsManualSession` / `createGrpcManualSession`. The old
+ * `runMcpManualSession` stays as a deprecated alias so existing imports keep
+ * working — it never had `run*` semantics (it returns a session, not a result).
+ * ------------------------------------------------------------------ */
+
 export { McpAdapter } from "./protocols/mcp";
 
 export {
+  createMcpManualSession,
+  createMcpManualSession as mcpManualSession,
+  /** @deprecated Use `createMcpManualSession`. */
   runMcpManualSession,
-  runMcpManualSession as mcpManualSession,
+} from "./protocols/mcp/session";
+
+export type {
+  McpManualSession,
+  McpManualSessionOptions,
+  McpSessionEvent,
+  McpSessionState,
+  McpRequestOptions,
+  McpListing,
+  McpTerminateOutcome,
 } from "./protocols/mcp/session";
 
 export { resolveMcpConfig } from "./protocols/mcp/config";
+export type { ResolvedMcpConfig } from "./protocols/mcp/config";
 
 export {
   initializeSession as initializeMcpSession,
@@ -117,6 +151,7 @@ export type {
   McpResource,
   McpPrompt,
   McpDiscoveryResult,
+  InitializeSessionInit as InitializeMcpSessionInit,
 } from "./protocols/mcp/discovery";
 
 export { generateMcpCall, generateAllMcpCalls } from "./protocols/mcp/generate";
@@ -132,6 +167,10 @@ export type {
   WriteMcpOptions,
   DiscoverAndWriteMcpResult,
 } from "./protocols/mcp/writeback";
+
+/* ------------------------------------------------------------------ *
+ * gRPC
+ * ------------------------------------------------------------------ */
 
 export {
   GrpcProtocolAdapter,
@@ -162,6 +201,10 @@ export type {
   GrpcManualSessionTarget,
 } from "./protocols/grpc/session";
 
+/* ------------------------------------------------------------------ *
+ * Debugger
+ * ------------------------------------------------------------------ */
+
 export interface DebuggerOptions {
   adapters?: ProtocolAdapter<any>[];
   extraAdapters?: ProtocolAdapter<any>[];
@@ -184,6 +227,16 @@ export interface PlanResult {
   streaming?: boolean;
   warnings?: string[];
   plan: unknown;
+}
+
+export interface SendManyFailure {
+  target: OperationTarget;
+  error: string;
+}
+
+export interface SendManyResult {
+  spec: any;
+  results: Array<SendResult | SendManyFailure>;
 }
 
 export function createDebugger(config: DebuggerOptions = {}) {
@@ -386,25 +439,14 @@ export function createDebugger(config: DebuggerOptions = {}) {
       } & Partial<Omit<SendOptions, "spec" | "target">>
     >,
     shared: Partial<Omit<SendOptions, "spec" | "target">> = {},
-  ): Promise<{
-    spec: any;
-    results: Array<
-      | SendResult
-      | {
-          target: OperationTarget;
-          error: string;
-        }
-    >;
-  }> {
+  ): Promise<SendManyResult> {
+    if (!Array.isArray(targets)) {
+      throw err("BAD_OPTIONS", "sendMany() requires an array of targets");
+    }
+
     let working = spec;
 
-    const results: Array<
-      | SendResult
-      | {
-          target: OperationTarget;
-          error: string;
-        }
-    > = [];
+    const results: Array<SendResult | SendManyFailure> = [];
 
     for (const entry of targets) {
       const signal = entry.signal ?? shared.signal;
