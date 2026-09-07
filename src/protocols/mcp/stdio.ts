@@ -1,7 +1,4 @@
-import {
-  spawn,
-  type ChildProcessWithoutNullStreams,
-} from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import { err } from "../../core/errors";
 
@@ -26,7 +23,11 @@ export interface StdioRpcMessage {
 
 export interface McpStdioConnection {
   readonly pid: number | undefined;
-  request<T = unknown>(method: string, params?: unknown, signal?: AbortSignal): Promise<T>;
+  request<T = unknown>(
+    method: string,
+    params?: unknown,
+    signal?: AbortSignal,
+  ): Promise<T>;
   notify(method: string, params?: unknown, signal?: AbortSignal): Promise<void>;
   close(): Promise<void>;
 }
@@ -47,13 +48,30 @@ interface PendingRequest {
   onAbort?: () => void;
 }
 
-export function createMcpStdioConnection(options: McpStdioOptions): McpStdioConnection {
-  if (!options || typeof options.command !== "string" || !options.command.trim()) {
-    throw err("BAD_MCP_STDIO_COMMAND", "MCP stdio requires a non-empty command.");
+export function createMcpStdioConnection(
+  options: McpStdioOptions,
+): McpStdioConnection {
+  if (
+    !options ||
+    typeof options.command !== "string" ||
+    !options.command.trim()
+  ) {
+    throw err(
+      "BAD_MCP_STDIO_COMMAND",
+      "MCP stdio requires a non-empty command.",
+    );
   }
 
-  const timeoutMs = normalizePositive(options.timeoutMs, DEFAULT_TIMEOUT_MS, "timeoutMs");
-  const maxBufferBytes = normalizePositive(options.maxBufferBytes, DEFAULT_MAX_BUFFER_BYTES, "maxBufferBytes");
+  const timeoutMs = normalizePositive(
+    options.timeoutMs,
+    DEFAULT_TIMEOUT_MS,
+    "timeoutMs",
+  );
+  const maxBufferBytes = normalizePositive(
+    options.maxBufferBytes,
+    DEFAULT_MAX_BUFFER_BYTES,
+    "maxBufferBytes",
+  );
   const env = buildEnvironment(options.env);
 
   let child: ChildProcessWithoutNullStreams;
@@ -66,7 +84,12 @@ export function createMcpStdioConnection(options: McpStdioOptions): McpStdioConn
       windowsHide: true,
     });
   } catch (cause) {
-    throw err("MCP_STDIO_SPAWN_FAILED", `Could not start MCP stdio process: ${messageOf(cause)}`, undefined, { cause });
+    throw err(
+      "MCP_STDIO_SPAWN_FAILED",
+      `Could not start MCP stdio process: ${messageOf(cause)}`,
+      undefined,
+      { cause },
+    );
   }
 
   let closed = false;
@@ -75,11 +98,17 @@ export function createMcpStdioConnection(options: McpStdioOptions): McpStdioConn
   let stderr = "";
   const pending = new Map<RequestId, PendingRequest>();
 
-  const cleanupPending = (id: RequestId, pendingRequest: PendingRequest): void => {
+  const cleanupPending = (
+    id: RequestId,
+    pendingRequest: PendingRequest,
+  ): void => {
     if (pending.get(id) === pendingRequest) pending.delete(id);
     if (pendingRequest.timer) clearTimeout(pendingRequest.timer);
     if (pendingRequest.signal && pendingRequest.onAbort) {
-      pendingRequest.signal.removeEventListener("abort", pendingRequest.onAbort);
+      pendingRequest.signal.removeEventListener(
+        "abort",
+        pendingRequest.onAbort,
+      );
     }
   };
 
@@ -103,7 +132,9 @@ export function createMcpStdioConnection(options: McpStdioOptions): McpStdioConn
     stdoutBuffer += chunk;
 
     if (Buffer.byteLength(stdoutBuffer, "utf8") > maxBufferBytes) {
-      failProtocol(`MCP stdio stdout buffer exceeded ${maxBufferBytes} bytes without a complete JSON-RPC line.`);
+      failProtocol(
+        `MCP stdio stdout buffer exceeded ${maxBufferBytes} bytes without a complete JSON-RPC line.`,
+      );
       return;
     }
 
@@ -116,7 +147,9 @@ export function createMcpStdioConnection(options: McpStdioOptions): McpStdioConn
       if (!line.trim()) continue;
 
       if (Buffer.byteLength(line, "utf8") > maxBufferBytes) {
-        failProtocol(`MCP stdio JSON-RPC message exceeded ${maxBufferBytes} bytes.`);
+        failProtocol(
+          `MCP stdio JSON-RPC message exceeded ${maxBufferBytes} bytes.`,
+        );
         return;
       }
 
@@ -124,7 +157,9 @@ export function createMcpStdioConnection(options: McpStdioOptions): McpStdioConn
       try {
         message = JSON.parse(line);
       } catch {
-        failProtocol(`MCP stdio emitted invalid JSON-RPC: ${line.slice(0, 512)}`);
+        failProtocol(
+          `MCP stdio emitted invalid JSON-RPC: ${line.slice(0, 512)}`,
+        );
         return;
       }
 
@@ -142,12 +177,21 @@ export function createMcpStdioConnection(options: McpStdioOptions): McpStdioConn
 
       if (message.error !== undefined) {
         pendingRequest.reject(
-          err("MCP_RPC_ERROR", `${message.error.code}: ${message.error.message}`, message.error),
+          err(
+            "MCP_RPC_ERROR",
+            `${message.error.code}: ${message.error.message}`,
+            message.error,
+          ),
         );
       } else if (Object.prototype.hasOwnProperty.call(message, "result")) {
         pendingRequest.resolve(message.result);
       } else {
-        pendingRequest.reject(err("MCP_STDIO_PROTOCOL_ERROR", "MCP stdio response contained neither result nor error."));
+        pendingRequest.reject(
+          err(
+            "MCP_STDIO_PROTOCOL_ERROR",
+            "MCP stdio response contained neither result nor error.",
+          ),
+        );
       }
     }
   });
@@ -173,7 +217,9 @@ export function createMcpStdioConnection(options: McpStdioOptions): McpStdioConn
   child.once("exit", (code, signal) => {
     if (closed) return;
     closed = true;
-    const diagnostic = stderr.trim() ? ` stderr: ${stderr.trim().slice(-2048)}` : "";
+    const diagnostic = stderr.trim()
+      ? ` stderr: ${stderr.trim().slice(-2048)}`
+      : "";
     rejectAll(
       err(
         "MCP_STDIO_EXITED",
@@ -184,14 +230,23 @@ export function createMcpStdioConnection(options: McpStdioOptions): McpStdioConn
 
   function write(message: StdioRpcMessage): Promise<void> {
     if (closed || child.stdin.destroyed || !child.stdin.writable) {
-      return Promise.reject(err("MCP_STDIO_CLOSED", "MCP stdio process is closed."));
+      return Promise.reject(
+        err("MCP_STDIO_CLOSED", "MCP stdio process is closed."),
+      );
     }
 
     let payload: string;
     try {
       payload = JSON.stringify(message) + "\n";
     } catch (cause) {
-      return Promise.reject(err("MCP_STDIO_SERIALIZE_FAILED", `Could not serialize MCP JSON-RPC message: ${messageOf(cause)}`, undefined, { cause }));
+      return Promise.reject(
+        err(
+          "MCP_STDIO_SERIALIZE_FAILED",
+          `Could not serialize MCP JSON-RPC message: ${messageOf(cause)}`,
+          undefined,
+          { cause },
+        ),
+      );
     }
 
     return new Promise((resolve, reject) => {
@@ -202,11 +257,20 @@ export function createMcpStdioConnection(options: McpStdioOptions): McpStdioConn
     });
   }
 
-  function request<T>(method: string, params?: unknown, signal?: AbortSignal): Promise<T> {
+  function request<T>(
+    method: string,
+    params?: unknown,
+    signal?: AbortSignal,
+  ): Promise<T> {
     if (signal?.aborted) {
-      return Promise.reject(err("MCP_ABORTED", "MCP request was aborted before send."));
+      return Promise.reject(
+        err("MCP_ABORTED", "MCP request was aborted before send."),
+      );
     }
-    if (closed) return Promise.reject(err("MCP_STDIO_CLOSED", "MCP stdio process is closed."));
+    if (closed)
+      return Promise.reject(
+        err("MCP_STDIO_CLOSED", "MCP stdio process is closed."),
+      );
 
     const id = ++nextId;
     return new Promise<T>((resolve, reject) => {
@@ -224,7 +288,9 @@ export function createMcpStdioConnection(options: McpStdioOptions): McpStdioConn
           cleanupPending(id, pendingRequest);
           reject(err("MCP_ABORTED", `${method} was aborted.`));
         };
-        signal.addEventListener("abort", pendingRequest.onAbort, { once: true });
+        signal.addEventListener("abort", pendingRequest.onAbort, {
+          once: true,
+        });
       }
 
       pending.set(id, pendingRequest);
@@ -241,9 +307,18 @@ export function createMcpStdioConnection(options: McpStdioOptions): McpStdioConn
     });
   }
 
-  async function notify(method: string, params?: unknown, signal?: AbortSignal): Promise<void> {
-    if (signal?.aborted) throw err("MCP_ABORTED", "MCP notification was aborted before send.");
-    await write({ jsonrpc: "2.0", method, ...(params === undefined ? {} : { params }) });
+  async function notify(
+    method: string,
+    params?: unknown,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (signal?.aborted)
+      throw err("MCP_ABORTED", "MCP notification was aborted before send.");
+    await write({
+      jsonrpc: "2.0",
+      method,
+      ...(params === undefined ? {} : { params }),
+    });
   }
 
   async function close(): Promise<void> {
@@ -291,7 +366,9 @@ export function createMcpStdioConnection(options: McpStdioOptions): McpStdioConn
   };
 }
 
-function buildEnvironment(overrides?: Record<string, string | undefined>): NodeJS.ProcessEnv {
+function buildEnvironment(
+  overrides?: Record<string, string | undefined>,
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   if (!overrides) return env;
   for (const [key, value] of Object.entries(overrides)) {
@@ -301,16 +378,27 @@ function buildEnvironment(overrides?: Record<string, string | undefined>): NodeJ
   return env;
 }
 
-function normalizePositive(value: number | undefined, fallback: number, name: string): number {
+function normalizePositive(
+  value: number | undefined,
+  fallback: number,
+  name: string,
+): number {
   const result = value ?? fallback;
   if (!Number.isFinite(result) || result <= 0) {
-    throw err("BAD_MCP_STDIO_CONFIG", `MCP stdio ${name} must be a positive finite number.`);
+    throw err(
+      "BAD_MCP_STDIO_CONFIG",
+      `MCP stdio ${name} must be a positive finite number.`,
+    );
   }
   return result;
 }
 
 function isRpcMessage(value: unknown): value is StdioRpcMessage {
-  return !!value && typeof value === "object" && (value as { jsonrpc?: unknown }).jsonrpc === "2.0";
+  return (
+    !!value &&
+    typeof value === "object" &&
+    (value as { jsonrpc?: unknown }).jsonrpc === "2.0"
+  );
 }
 
 function messageOf(value: unknown): string {

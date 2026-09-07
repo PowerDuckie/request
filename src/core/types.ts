@@ -415,6 +415,7 @@ export interface McpOptions {
   env?: Record<string, string | undefined>;
   timeoutMs?: number;
   maxBufferBytes?: number;
+  maxStderrBytes?: number;
 
   /* MCP */
   method?: string;
