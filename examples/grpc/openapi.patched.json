@@ -1,0 +1,1477 @@
+{
+  "openapi": "3.2.0",
+  "info": {
+    "title": "gRPC OpenAPI Demo",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/grpc/demo/echo/Echo/Boom": {
+      "post": {
+        "operationId": "grpc_demo_echo_Echo_Boom",
+        "summary": "demo.echo.Echo/Boom",
+        "tags": [
+          "grpc"
+        ],
+        "x-protocol": "grpc",
+        "x-grpc": {
+          "address": "127.0.0.1:50051",
+          "service": "demo.echo.Echo",
+          "method": "Boom",
+          "protoPaths": [
+            "/Users/electron/request/examples/grpc/proto"
+          ]
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "messages": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "gRPC result envelope"
+          },
+          "default": {
+            "description": "gRPC error"
+          }
+        }
+      }
+    },
+    "/grpc/demo/echo/Echo/Chat": {
+      "post": {
+        "operationId": "grpc_demo_echo_Echo_Chat",
+        "summary": "demo.echo.Echo/Chat",
+        "tags": [
+          "grpc"
+        ],
+        "x-protocol": "grpc",
+        "x-grpc": {
+          "address": "127.0.0.1:50051",
+          "service": "demo.echo.Echo",
+          "method": "Chat",
+          "protoPaths": [
+            "/Users/electron/request/examples/grpc/proto"
+          ]
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "messages": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "gRPC result envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "examples": [
+                        "bidi_streaming"
+                      ]
+                    },
+                    "messages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "from": {
+                            "type": "string",
+                            "examples": [
+                              "server"
+                            ]
+                          },
+                          "text": {
+                            "type": "string",
+                            "examples": [
+                              "welcome",
+                              "you said: one",
+                              "you said: two"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "from",
+                          "text"
+                        ]
+                      }
+                    },
+                    "status": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "examples": [
+                            0
+                          ]
+                        },
+                        "codeName": {
+                          "type": "string",
+                          "examples": [
+                            "OK"
+                          ]
+                        },
+                        "details": {
+                          "type": "string",
+                          "examples": [
+                            "OK"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "codeName",
+                        "details"
+                      ]
+                    },
+                    "trailers": {
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "direction": {
+                            "type": "string",
+                            "examples": [
+                              "outbound",
+                              "meta",
+                              "inbound"
+                            ]
+                          },
+                          "payload": {
+                            "type": "object",
+                            "properties": {
+                              "text": {
+                                "type": "string",
+                                "examples": [
+                                  "one",
+                                  "two",
+                                  "welcome"
+                                ]
+                              },
+                              "from": {
+                                "type": "string",
+                                "examples": [
+                                  "server"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "text"
+                            ]
+                          },
+                          "seq": {
+                            "type": "integer",
+                            "examples": [
+                              0,
+                              1,
+                              2
+                            ]
+                          },
+                          "at": {
+                            "type": "integer",
+                            "examples": [
+                              1788792945375,
+                              1788792945380,
+                              1788792945381
+                            ]
+                          },
+                          "metadata": {
+                            "type": "object",
+                            "properties": {
+                              "content-type": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "examples": [
+                                    "application/grpc+proto"
+                                  ]
+                                }
+                              },
+                              "date": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "examples": [
+                                    "Mon, 07 Sep 2026 14:55:45 GMT"
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          "status": {
+                            "type": "object",
+                            "properties": {
+                              "code": {
+                                "type": "integer",
+                                "examples": [
+                                  0
+                                ]
+                              },
+                              "codeName": {
+                                "type": "string",
+                                "examples": [
+                                  "OK"
+                                ]
+                              },
+                              "details": {
+                                "type": "string",
+                                "examples": [
+                                  "OK"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "codeName",
+                              "details"
+                            ]
+                          },
+                          "statusOrigin": {
+                            "type": "string",
+                            "examples": [
+                              "server"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "direction",
+                          "seq",
+                          "at"
+                        ]
+                      }
+                    },
+                    "truncated": {
+                      "type": "boolean",
+                      "examples": [
+                        false
+                      ]
+                    },
+                    "truncatedReason": {},
+                    "warnings": {
+                      "type": "array",
+                      "items": {}
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "messages",
+                    "status",
+                    "trailers",
+                    "events",
+                    "truncated",
+                    "warnings"
+                  ]
+                },
+                "examples": {
+                  "capturedSample": {
+                    "summary": "Captured from a live call",
+                    "value": {
+                      "kind": "bidi_streaming",
+                      "messages": [
+                        {
+                          "from": "server",
+                          "text": "welcome"
+                        },
+                        {
+                          "from": "server",
+                          "text": "you said: one"
+                        },
+                        {
+                          "from": "server",
+                          "text": "you said: two"
+                        }
+                      ],
+                      "status": {
+                        "code": 0,
+                        "codeName": "OK",
+                        "details": "OK"
+                      },
+                      "trailers": {},
+                      "events": [
+                        {
+                          "direction": "outbound",
+                          "payload": {
+                            "text": "one"
+                          },
+                          "seq": 0,
+                          "at": 1788792945375
+                        },
+                        {
+                          "direction": "outbound",
+                          "payload": {
+                            "text": "two"
+                          },
+                          "seq": 1,
+                          "at": 1788792945375
+                        },
+                        {
+                          "direction": "meta",
+                          "metadata": {
+                            "content-type": [
+                              "application/grpc+proto"
+                            ],
+                            "date": [
+                              "Mon, 07 Sep 2026 14:55:45 GMT"
+                            ]
+                          },
+                          "seq": 2,
+                          "at": 1788792945380
+                        },
+                        {
+                          "direction": "inbound",
+                          "payload": {
+                            "from": "server",
+                            "text": "welcome"
+                          },
+                          "seq": 3,
+                          "at": 1788792945380
+                        },
+                        {
+                          "direction": "inbound",
+                          "payload": {
+                            "from": "server",
+                            "text": "you said: one"
+                          },
+                          "seq": 4,
+                          "at": 1788792945380
+                        },
+                        {
+                          "direction": "inbound",
+                          "payload": {
+                            "from": "server",
+                            "text": "you said: two"
+                          },
+                          "seq": 5,
+                          "at": 1788792945380
+                        },
+                        {
+                          "direction": "status",
+                          "status": {
+                            "code": 0,
+                            "codeName": "OK",
+                            "details": "OK"
+                          },
+                          "statusOrigin": "server",
+                          "metadata": {},
+                          "seq": 6,
+                          "at": 1788792945381
+                        }
+                      ],
+                      "truncated": false,
+                      "warnings": []
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "gRPC error"
+          }
+        }
+      }
+    },
+    "/grpc/demo/echo/Echo/Countdown": {
+      "post": {
+        "operationId": "grpc_demo_echo_Echo_Countdown",
+        "summary": "demo.echo.Echo/Countdown",
+        "tags": [
+          "grpc"
+        ],
+        "x-protocol": "grpc",
+        "x-grpc": {
+          "address": "127.0.0.1:50051",
+          "service": "demo.echo.Echo",
+          "method": "Countdown",
+          "protoPaths": [
+            "/Users/electron/request/examples/grpc/proto"
+          ]
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "messages": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "gRPC result envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "examples": [
+                        "server_streaming"
+                      ]
+                    },
+                    "messages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "value": {
+                            "type": "integer",
+                            "examples": [
+                              3,
+                              2,
+                              1
+                            ]
+                          }
+                        },
+                        "required": [
+                          "value"
+                        ]
+                      }
+                    },
+                    "status": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "examples": [
+                            0
+                          ]
+                        },
+                        "codeName": {
+                          "type": "string",
+                          "examples": [
+                            "OK"
+                          ]
+                        },
+                        "details": {
+                          "type": "string",
+                          "examples": [
+                            "OK"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "codeName",
+                        "details"
+                      ]
+                    },
+                    "trailers": {
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "direction": {
+                            "type": "string",
+                            "examples": [
+                              "outbound",
+                              "meta",
+                              "inbound"
+                            ]
+                          },
+                          "payload": {
+                            "type": "object",
+                            "properties": {
+                              "from": {
+                                "type": "integer",
+                                "examples": [
+                                  3
+                                ]
+                              },
+                              "interval_ms": {
+                                "type": "integer",
+                                "examples": [
+                                  10
+                                ]
+                              },
+                              "value": {
+                                "type": "integer",
+                                "examples": [
+                                  3,
+                                  2,
+                                  1
+                                ]
+                              }
+                            }
+                          },
+                          "seq": {
+                            "type": "integer",
+                            "examples": [
+                              0,
+                              1,
+                              2
+                            ]
+                          },
+                          "at": {
+                            "type": "integer",
+                            "examples": [
+                              1788792945295,
+                              1788792945313,
+                              1788792945314
+                            ]
+                          },
+                          "metadata": {
+                            "type": "object",
+                            "properties": {
+                              "content-type": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "examples": [
+                                    "application/grpc+proto"
+                                  ]
+                                }
+                              },
+                              "date": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "examples": [
+                                    "Mon, 07 Sep 2026 14:55:45 GMT"
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          "status": {
+                            "type": "object",
+                            "properties": {
+                              "code": {
+                                "type": "integer",
+                                "examples": [
+                                  0
+                                ]
+                              },
+                              "codeName": {
+                                "type": "string",
+                                "examples": [
+                                  "OK"
+                                ]
+                              },
+                              "details": {
+                                "type": "string",
+                                "examples": [
+                                  "OK"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "codeName",
+                              "details"
+                            ]
+                          },
+                          "statusOrigin": {
+                            "type": "string",
+                            "examples": [
+                              "server"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "direction",
+                          "seq",
+                          "at"
+                        ]
+                      }
+                    },
+                    "truncated": {
+                      "type": "boolean",
+                      "examples": [
+                        false
+                      ]
+                    },
+                    "truncatedReason": {},
+                    "warnings": {
+                      "type": "array",
+                      "items": {}
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "messages",
+                    "status",
+                    "trailers",
+                    "events",
+                    "truncated",
+                    "warnings"
+                  ]
+                },
+                "examples": {
+                  "capturedSample": {
+                    "summary": "Captured from a live call",
+                    "value": {
+                      "kind": "server_streaming",
+                      "messages": [
+                        {
+                          "value": 3
+                        },
+                        {
+                          "value": 2
+                        },
+                        {
+                          "value": 1
+                        },
+                        {
+                          "value": 0
+                        }
+                      ],
+                      "status": {
+                        "code": 0,
+                        "codeName": "OK",
+                        "details": "OK"
+                      },
+                      "trailers": {},
+                      "events": [
+                        {
+                          "direction": "outbound",
+                          "payload": {
+                            "from": 3,
+                            "interval_ms": 10
+                          },
+                          "seq": 0,
+                          "at": 1788792945295
+                        },
+                        {
+                          "direction": "meta",
+                          "metadata": {
+                            "content-type": [
+                              "application/grpc+proto"
+                            ],
+                            "date": [
+                              "Mon, 07 Sep 2026 14:55:45 GMT"
+                            ]
+                          },
+                          "seq": 1,
+                          "at": 1788792945313
+                        },
+                        {
+                          "direction": "inbound",
+                          "payload": {
+                            "value": 3
+                          },
+                          "seq": 2,
+                          "at": 1788792945314
+                        },
+                        {
+                          "direction": "inbound",
+                          "payload": {
+                            "value": 2
+                          },
+                          "seq": 3,
+                          "at": 1788792945324
+                        },
+                        {
+                          "direction": "inbound",
+                          "payload": {
+                            "value": 1
+                          },
+                          "seq": 4,
+                          "at": 1788792945335
+                        },
+                        {
+                          "direction": "inbound",
+                          "payload": {
+                            "value": 0
+                          },
+                          "seq": 5,
+                          "at": 1788792945347
+                        },
+                        {
+                          "direction": "status",
+                          "status": {
+                            "code": 0,
+                            "codeName": "OK",
+                            "details": "OK"
+                          },
+                          "statusOrigin": "server",
+                          "metadata": {},
+                          "seq": 6,
+                          "at": 1788792945359
+                        }
+                      ],
+                      "truncated": false,
+                      "warnings": []
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "gRPC error"
+          }
+        }
+      }
+    },
+    "/grpc/demo/echo/Echo/Say": {
+      "post": {
+        "operationId": "grpc_demo_echo_Echo_Say",
+        "summary": "demo.echo.Echo/Say",
+        "tags": [
+          "grpc"
+        ],
+        "x-protocol": "grpc",
+        "x-grpc": {
+          "address": "127.0.0.1:50051",
+          "service": "demo.echo.Echo",
+          "method": "Say",
+          "protoPaths": [
+            "/Users/electron/request/examples/grpc/proto"
+          ]
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "messages": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "gRPC result envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "examples": [
+                        "unary"
+                      ]
+                    },
+                    "messages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "text": {
+                            "type": "string",
+                            "examples": [
+                              "echo: hello"
+                            ]
+                          },
+                          "meta": {
+                            "type": "object",
+                            "properties": {
+                              "trace_id": {
+                                "type": "string",
+                                "examples": [
+                                  "srv-1788792945282"
+                                ]
+                              },
+                              "timestamp_ms": {
+                                "type": "string",
+                                "examples": [
+                                  "1788792945282"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "trace_id",
+                              "timestamp_ms"
+                            ]
+                          },
+                          "had_nickname": {
+                            "type": "boolean",
+                            "examples": [
+                              false
+                            ]
+                          },
+                          "flavor_used": {
+                            "type": "string",
+                            "examples": [
+                              "plain"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "text",
+                          "meta",
+                          "had_nickname",
+                          "flavor_used"
+                        ]
+                      }
+                    },
+                    "status": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "examples": [
+                            0
+                          ]
+                        },
+                        "codeName": {
+                          "type": "string",
+                          "examples": [
+                            "OK"
+                          ]
+                        },
+                        "details": {
+                          "type": "string",
+                          "examples": [
+                            "OK"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "codeName",
+                        "details"
+                      ]
+                    },
+                    "trailers": {
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "direction": {
+                            "type": "string",
+                            "examples": [
+                              "outbound",
+                              "meta",
+                              "inbound"
+                            ]
+                          },
+                          "payload": {
+                            "type": "object",
+                            "properties": {
+                              "text": {
+                                "type": "string",
+                                "examples": [
+                                  "hello",
+                                  "echo: hello"
+                                ]
+                              },
+                              "plain": {
+                                "type": "string",
+                                "examples": [
+                                  "p"
+                                ]
+                              },
+                              "meta": {
+                                "type": "object",
+                                "properties": {
+                                  "trace_id": {
+                                    "type": "string",
+                                    "examples": [
+                                      "srv-1788792945282"
+                                    ]
+                                  },
+                                  "timestamp_ms": {
+                                    "type": "string",
+                                    "examples": [
+                                      "1788792945282"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "trace_id",
+                                  "timestamp_ms"
+                                ]
+                              },
+                              "had_nickname": {
+                                "type": "boolean",
+                                "examples": [
+                                  false
+                                ]
+                              },
+                              "flavor_used": {
+                                "type": "string",
+                                "examples": [
+                                  "plain"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "text"
+                            ]
+                          },
+                          "seq": {
+                            "type": "integer",
+                            "examples": [
+                              0,
+                              1,
+                              2
+                            ]
+                          },
+                          "at": {
+                            "type": "integer",
+                            "examples": [
+                              1788792945185,
+                              1788792945283,
+                              1788792945287
+                            ]
+                          },
+                          "metadata": {
+                            "type": "object",
+                            "properties": {
+                              "content-type": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "examples": [
+                                    "application/grpc+proto"
+                                  ]
+                                }
+                              },
+                              "date": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "examples": [
+                                    "Mon, 07 Sep 2026 14:55:45 GMT"
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          "status": {
+                            "type": "object",
+                            "properties": {
+                              "code": {
+                                "type": "integer",
+                                "examples": [
+                                  0
+                                ]
+                              },
+                              "codeName": {
+                                "type": "string",
+                                "examples": [
+                                  "OK"
+                                ]
+                              },
+                              "details": {
+                                "type": "string",
+                                "examples": [
+                                  "OK"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "codeName",
+                              "details"
+                            ]
+                          },
+                          "statusOrigin": {
+                            "type": "string",
+                            "examples": [
+                              "server"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "direction",
+                          "seq",
+                          "at"
+                        ]
+                      }
+                    },
+                    "truncated": {
+                      "type": "boolean",
+                      "examples": [
+                        false
+                      ]
+                    },
+                    "truncatedReason": {},
+                    "warnings": {
+                      "type": "array",
+                      "items": {}
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "messages",
+                    "status",
+                    "trailers",
+                    "events",
+                    "truncated",
+                    "warnings"
+                  ]
+                },
+                "examples": {
+                  "capturedSample": {
+                    "summary": "Captured from a live call",
+                    "value": {
+                      "kind": "unary",
+                      "messages": [
+                        {
+                          "text": "echo: hello",
+                          "meta": {
+                            "trace_id": "srv-1788792945282",
+                            "timestamp_ms": "1788792945282"
+                          },
+                          "had_nickname": false,
+                          "flavor_used": "plain"
+                        }
+                      ],
+                      "status": {
+                        "code": 0,
+                        "codeName": "OK",
+                        "details": "OK"
+                      },
+                      "trailers": {},
+                      "events": [
+                        {
+                          "direction": "outbound",
+                          "payload": {
+                            "text": "hello",
+                            "plain": "p"
+                          },
+                          "seq": 0,
+                          "at": 1788792945185
+                        },
+                        {
+                          "direction": "meta",
+                          "metadata": {
+                            "content-type": [
+                              "application/grpc+proto"
+                            ],
+                            "date": [
+                              "Mon, 07 Sep 2026 14:55:45 GMT"
+                            ]
+                          },
+                          "seq": 1,
+                          "at": 1788792945283
+                        },
+                        {
+                          "direction": "inbound",
+                          "payload": {
+                            "text": "echo: hello",
+                            "meta": {
+                              "trace_id": "srv-1788792945282",
+                              "timestamp_ms": "1788792945282"
+                            },
+                            "had_nickname": false,
+                            "flavor_used": "plain"
+                          },
+                          "seq": 2,
+                          "at": 1788792945287
+                        },
+                        {
+                          "direction": "status",
+                          "status": {
+                            "code": 0,
+                            "codeName": "OK",
+                            "details": "OK"
+                          },
+                          "statusOrigin": "server",
+                          "metadata": {},
+                          "seq": 3,
+                          "at": 1788792945287
+                        }
+                      ],
+                      "truncated": false,
+                      "warnings": []
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "gRPC error"
+          }
+        }
+      }
+    },
+    "/grpc/demo/echo/Echo/Sum": {
+      "post": {
+        "operationId": "grpc_demo_echo_Echo_Sum",
+        "summary": "demo.echo.Echo/Sum",
+        "tags": [
+          "grpc"
+        ],
+        "x-protocol": "grpc",
+        "x-grpc": {
+          "address": "127.0.0.1:50051",
+          "service": "demo.echo.Echo",
+          "method": "Sum",
+          "protoPaths": [
+            "/Users/electron/request/examples/grpc/proto"
+          ]
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "messages": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "gRPC result envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "examples": [
+                        "client_streaming"
+                      ]
+                    },
+                    "messages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "total": {
+                            "type": "integer",
+                            "examples": [
+                              6
+                            ]
+                          },
+                          "count": {
+                            "type": "integer",
+                            "examples": [
+                              3
+                            ]
+                          }
+                        },
+                        "required": [
+                          "total",
+                          "count"
+                        ]
+                      }
+                    },
+                    "status": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "examples": [
+                            0
+                          ]
+                        },
+                        "codeName": {
+                          "type": "string",
+                          "examples": [
+                            "OK"
+                          ]
+                        },
+                        "details": {
+                          "type": "string",
+                          "examples": [
+                            "OK"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "codeName",
+                        "details"
+                      ]
+                    },
+                    "trailers": {
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "direction": {
+                            "type": "string",
+                            "examples": [
+                              "outbound",
+                              "meta",
+                              "inbound"
+                            ]
+                          },
+                          "payload": {
+                            "type": "object",
+                            "properties": {
+                              "value": {
+                                "type": "integer",
+                                "examples": [
+                                  1,
+                                  2,
+                                  3
+                                ]
+                              },
+                              "total": {
+                                "type": "integer",
+                                "examples": [
+                                  6
+                                ]
+                              },
+                              "count": {
+                                "type": "integer",
+                                "examples": [
+                                  3
+                                ]
+                              }
+                            }
+                          },
+                          "seq": {
+                            "type": "integer",
+                            "examples": [
+                              0,
+                              1,
+                              2
+                            ]
+                          },
+                          "at": {
+                            "type": "integer",
+                            "examples": [
+                              1788792945364,
+                              1788792945370
+                            ]
+                          },
+                          "metadata": {
+                            "type": "object",
+                            "properties": {
+                              "content-type": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "examples": [
+                                    "application/grpc+proto"
+                                  ]
+                                }
+                              },
+                              "date": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "examples": [
+                                    "Mon, 07 Sep 2026 14:55:45 GMT"
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          "status": {
+                            "type": "object",
+                            "properties": {
+                              "code": {
+                                "type": "integer",
+                                "examples": [
+                                  0
+                                ]
+                              },
+                              "codeName": {
+                                "type": "string",
+                                "examples": [
+                                  "OK"
+                                ]
+                              },
+                              "details": {
+                                "type": "string",
+                                "examples": [
+                                  "OK"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "codeName",
+                              "details"
+                            ]
+                          },
+                          "statusOrigin": {
+                            "type": "string",
+                            "examples": [
+                              "server"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "direction",
+                          "seq",
+                          "at"
+                        ]
+                      }
+                    },
+                    "truncated": {
+                      "type": "boolean",
+                      "examples": [
+                        false
+                      ]
+                    },
+                    "truncatedReason": {},
+                    "warnings": {
+                      "type": "array",
+                      "items": {}
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "messages",
+                    "status",
+                    "trailers",
+                    "events",
+                    "truncated",
+                    "warnings"
+                  ]
+                },
+                "examples": {
+                  "capturedSample": {
+                    "summary": "Captured from a live call",
+                    "value": {
+                      "kind": "client_streaming",
+                      "messages": [
+                        {
+                          "total": 6,
+                          "count": 3
+                        }
+                      ],
+                      "status": {
+                        "code": 0,
+                        "codeName": "OK",
+                        "details": "OK"
+                      },
+                      "trailers": {},
+                      "events": [
+                        {
+                          "direction": "outbound",
+                          "payload": {
+                            "value": 1
+                          },
+                          "seq": 0,
+                          "at": 1788792945364
+                        },
+                        {
+                          "direction": "outbound",
+                          "payload": {
+                            "value": 2
+                          },
+                          "seq": 1,
+                          "at": 1788792945364
+                        },
+                        {
+                          "direction": "outbound",
+                          "payload": {
+                            "value": 3
+                          },
+                          "seq": 2,
+                          "at": 1788792945364
+                        },
+                        {
+                          "direction": "meta",
+                          "metadata": {
+                            "content-type": [
+                              "application/grpc+proto"
+                            ],
+                            "date": [
+                              "Mon, 07 Sep 2026 14:55:45 GMT"
+                            ]
+                          },
+                          "seq": 3,
+                          "at": 1788792945370
+                        },
+                        {
+                          "direction": "inbound",
+                          "payload": {
+                            "total": 6,
+                            "count": 3
+                          },
+                          "seq": 4,
+                          "at": 1788792945370
+                        },
+                        {
+                          "direction": "status",
+                          "status": {
+                            "code": 0,
+                            "codeName": "OK",
+                            "details": "OK"
+                          },
+                          "statusOrigin": "server",
+                          "metadata": {},
+                          "seq": 5,
+                          "at": 1788792945370
+                        }
+                      ],
+                      "truncated": false,
+                      "warnings": []
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "gRPC error"
+          }
+        }
+      }
+    }
+  }
+}

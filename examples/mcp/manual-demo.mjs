@@ -1,11 +1,26 @@
-
 import { mcpManualSession } from "../../dist/index.js";
-const endpoint = process.env.MCP_URL ?? "http://127.0.0.1:4200/mcp";
-const s = mcpManualSession({ endpoint });
-await s.open();
-await s.send({ method: "tools/list", params: {} });
-await s.send({ method: "prompts/list", params: {} });
-await s.send({ method: "resources/list", params: {} });
-await s.send({ method: "tools/call", params: { name: "echo", arguments: { text: "manual mcp" } } });
-await s.close();
-console.log(JSON.stringify(s.events, null, 2));
+
+const endpoint = process.env.MCP_ENDPOINT ?? "http://127.0.0.1:8788/mcp";
+const session = mcpManualSession({
+  endpoint,
+  clientInfo: { name: "manual-demo", version: "1.0.0" },
+});
+
+await session.open();
+console.log("opened", session.sessionId);
+
+console.log("tools:");
+console.log(JSON.stringify(await session.listTools(), null, 2));
+
+console.log("prompts:");
+console.log(JSON.stringify(await session.listPrompts(), null, 2));
+
+console.log("resources/sources:");
+console.log(JSON.stringify(await session.listSources(), null, 2));
+
+console.log("tool call:");
+console.log(JSON.stringify(await session.callTool("echo", { text: "hello" }), null, 2));
+
+await session.close();
+console.log("events:");
+console.log(JSON.stringify(session.events, null, 2));

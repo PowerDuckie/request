@@ -24,29 +24,52 @@ import { err, toErrorInfo, ProtoKitError } from "./core/errors";
 export * from "./core/types";
 export { ProtoKitError } from "./core/errors";
 export { AdapterRegistry } from "./core/registry";
+
 export type {
   ProtocolAdapter,
   AdapterContext,
   ExecuteContext,
 } from "./core/protocol";
+
 export { locateOperation } from "./openapi/locate";
 export type { LocatedOperation } from "./openapi/locate";
+
 export { inferSchema, inferSchemaFromMany } from "./openapi/infer";
+
 export { mergeSchema } from "./openapi/merge";
 export { sampleFromSchema } from "./openapi/sample";
+
 export { toResponseObject, writeBackResponse } from "./openapi/writeback";
+
 export type { WriteBackOptions, ToResponseOptions } from "./openapi/writeback";
+
 export { HttpAdapter } from "./protocols/http";
-export { WebSocketAdapter } from "./protocols/ws";
 export { BUILTIN_CAPTURE_TEST } from "./protocols/http/scripts";
 export { SseParser } from "./protocols/http/sse-parser";
 
+export {
+  WebSocketAdapter,
+  createWsManualSession,
+  createWsManualSession as runWebSocketSession,
+  createWsManualSession as wsManualSession,
+} from "./protocols/ws";
+
+export type {
+  CreateWsManualSessionOptions,
+  WebSocketSessionEvent,
+  WebSocketSessionState,
+  WsManualSession,
+  WsSendOptions,
+} from "./protocols/ws";
+
 export { GraphQLAdapter } from "./protocols/graphql";
 export { resolveGraphQLConfig } from "./protocols/graphql/config";
+
 export {
   introspectSchema,
   INTROSPECTION_QUERY,
 } from "./protocols/graphql/introspection";
+
 export type {
   IntrospectedSchema,
   IntrospectionResult,
@@ -55,28 +78,39 @@ export type {
   GraphQLArg,
   GraphQLTypeRef,
 } from "./protocols/graphql/introspection";
+
 export {
   generateOperation,
   generateAllOperations,
 } from "./protocols/graphql/generate";
+
 export type { GeneratedOperation } from "./protocols/graphql/generate";
+
 export {
   writeGraphQLOperations,
   discoverAndWriteGraphQLSchema,
 } from "./protocols/graphql/writeback";
+
 export type {
   WriteGraphQLOptions,
   DiscoverAndWriteResult as DiscoverAndWriteGraphQLResult,
 } from "./protocols/graphql/writeback";
 
 export { McpAdapter } from "./protocols/mcp";
-export { GrpcProtocolAdapter, writeGrpcOperations, discoverAndWriteGrpcOperations, grpcManualSession, mcpManualSession, wsManualSession } from "./protocols/grpc/openapi";
+
+export {
+  runMcpManualSession,
+  runMcpManualSession as mcpManualSession,
+} from "./protocols/mcp/session";
+
 export { resolveMcpConfig } from "./protocols/mcp/config";
+
 export {
   initializeSession as initializeMcpSession,
   discoverMcpCapabilities,
   MCP_PROTOCOL_VERSION,
 } from "./protocols/mcp/discovery";
+
 export type {
   McpCapability,
   McpTool,
@@ -84,36 +118,60 @@ export type {
   McpPrompt,
   McpDiscoveryResult,
 } from "./protocols/mcp/discovery";
-export {
-  generateMcpCall,
-  generateAllMcpCalls,
-} from "./protocols/mcp/generate";
+
+export { generateMcpCall, generateAllMcpCalls } from "./protocols/mcp/generate";
+
 export type { GeneratedMcpCall } from "./protocols/mcp/generate";
+
 export {
   writeMcpOperations,
   discoverAndWriteMcpCapabilities,
 } from "./protocols/mcp/writeback";
+
 export type {
   WriteMcpOptions,
   DiscoverAndWriteMcpResult,
 } from "./protocols/mcp/writeback";
 
+export {
+  GrpcProtocolAdapter,
+  writeGrpcOperations,
+  discoverAndWriteGrpcOperations,
+} from "./protocols/grpc/openapi";
+
+export {
+  discover as grpcDiscover,
+  discover as discoverGrpc,
+} from "./protocols/grpc/discovery";
+
+export type {
+  DiscoveryResult as GrpcDiscoveryResult,
+  DiscoveredMethod as GrpcDiscoveredMethod,
+  DiscoveredService as GrpcDiscoveredService,
+} from "./protocols/grpc/discovery";
+
+export {
+  createGrpcManualSession,
+  createGrpcManualSession as grpcManualSession,
+} from "./protocols/grpc/session";
+
+export type {
+  GrpcManualSession,
+  GrpcManualSessionEvent,
+  GrpcManualSessionState,
+  GrpcManualSessionTarget,
+} from "./protocols/grpc/session";
+
 export interface DebuggerOptions {
-  /** Replaces the default adapter set when provided. */
   adapters?: ProtocolAdapter<any>[];
-  /** Adapters appended to the default set. */
   extraAdapters?: ProtocolAdapter<any>[];
   writeBack?: WriteBackOptions;
   response?: ToResponseOptions;
+
   /**
    * Write back a schema inferred from a truncated stream.
    *
    * @default true
-   *
-   * A sampled stream stops at `maxEvents` or `maxStreamMs`, so its schema
-   * reflects only the events observed. That is usually what the caller wants,
-   * but it can under-report optional fields that appear later in the stream.
-   * Either way `writeBackWarnings` explains what happened.
    */
   writeBackTruncated?: boolean;
 }
@@ -124,13 +182,13 @@ export interface PlanResult {
   collection?: any;
   environment?: any;
   streaming?: boolean;
-  /** Non-fatal issues raised while generating the artifacts. */
   warnings?: string[];
   plan: unknown;
 }
 
 export function createDebugger(config: DebuggerOptions = {}) {
   const registry = new AdapterRegistry();
+
   const base = config.adapters ?? [
     new HttpAdapter(),
     new WebSocketAdapter(),
@@ -138,31 +196,38 @@ export function createDebugger(config: DebuggerOptions = {}) {
     new McpAdapter(),
     new GrpcProtocolAdapter(),
   ];
-  for (const adapter of [...base, ...(config.extraAdapters ?? [])])
+
+  for (const adapter of [...base, ...(config.extraAdapters ?? [])]) {
     registry.register(adapter);
+  }
 
   const prepare = (options: SendOptions) => {
-    if (!options || typeof options !== "object")
+    if (!options || typeof options !== "object") {
       throw err("BAD_OPTIONS", "send() requires an options object");
-    if (!options.spec || typeof options.spec !== "object")
+    }
+
+    if (!options.spec || typeof options.spec !== "object") {
       throw err("BAD_OPTIONS", "send() requires options.spec");
+    }
 
     const located = locateOperation(options.spec, options.target);
-    const ctx = { spec: options.spec, options, located };
-    const adapter = registry.resolve(ctx);
 
-    // plan() validates caller-supplied configuration, so its errors are already
-    // specific (BAD_WS_URL, BAD_WS_OPTIONS, ...) and must not be re-wrapped.
+    const ctx = {
+      spec: options.spec,
+      options,
+      located,
+    };
+
+    const adapter = registry.resolve(ctx);
     const plan = adapter.plan(ctx);
-    return { located, adapter, plan };
+
+    return {
+      located,
+      adapter,
+      plan,
+    };
   };
 
-  /**
-   * Execute through the adapter, preserving the original error code.
-   *
-   * Wrapping everything as EXECUTION_FAILED would hide whether the collection
-   * was malformed, the runtime failed to start, or the network broke.
-   */
   const execute = async (
     adapter: ProtocolAdapter<any>,
     plan: unknown,
@@ -171,27 +236,37 @@ export function createDebugger(config: DebuggerOptions = {}) {
     const ctx: ExecuteContext | undefined = options.signal
       ? { signal: options.signal }
       : undefined;
+
     try {
       return await adapter.execute(plan, options, ctx);
-    } catch (e) {
-      if (ProtoKitError.isProtoKitError(e)) throw e;
+    } catch (error) {
+      if (ProtoKitError.isProtoKitError(error)) {
+        throw error;
+      }
+
       throw err(
         "EXECUTION_FAILED",
-        `Adapter "${adapter.name}" failed: ${toErrorInfo(e).message}`,
-        e,
+        `Adapter "${adapter.name}" failed: ${toErrorInfo(error).message}`,
+        error,
       );
     }
   };
 
-  /** Inspect the generated artifacts without performing any network I/O. */
   function toCollection(
     spec: any,
     target: OperationTarget,
     overrides: Partial<Omit<SendOptions, "spec" | "target">> = {},
   ): PlanResult {
-    const options = { ...overrides, spec, target } as SendOptions;
+    const options = {
+      ...overrides,
+      spec,
+      target,
+    } as SendOptions;
+
     const { located, adapter, plan } = prepare(options);
+
     const anyPlan = plan as any;
+
     return {
       protocol: adapter.name,
       located,
@@ -203,27 +278,36 @@ export function createDebugger(config: DebuggerOptions = {}) {
     };
   }
 
-  /** Execute the operation and fold the observed response back into the spec. */
   async function send(options: SendOptions): Promise<SendResult> {
     const { located, adapter, plan } = prepare(options);
+
     const result = await execute(adapter, plan, options);
+
     const anyPlan = plan as any;
 
     const warnings: string[] = Array.isArray(anyPlan?.warnings)
       ? [...anyPlan.warnings]
       : [];
 
-    // A failure here must not discard an otherwise usable result.
-    let fragment: { response: any; statusCode: string };
+    let fragment: {
+      response: any;
+      statusCode: string;
+    };
+
     let fragmentError: string | undefined;
+
     try {
       fragment = toResponseObject(result, config.response);
-    } catch (e) {
-      fragmentError = `response fragment error: ${toErrorInfo(e).message}`;
+    } catch (error) {
+      fragmentError = `response fragment error: ${toErrorInfo(error).message}`;
+
       fragment = {
-        response: { description: "Fragment generation failed" },
+        response: {
+          description: "Fragment generation failed",
+        },
         statusCode: String(result.response.status || "default"),
       };
+
       warnings.push(fragmentError);
     }
 
@@ -258,11 +342,15 @@ export function createDebugger(config: DebuggerOptions = {}) {
           }); fields appearing later were not observed.`,
         );
       }
+
       if (result.response.droppedEvents) {
         warnings.push(
-          `${result.response.droppedEvents} event(s) exceeded the size caps and were not fully retained.`,
+          `${
+            result.response.droppedEvents
+          } event(s) exceeded the size caps and were not fully retained.`,
         );
       }
+
       try {
         patchedSpec = writeBackResponse(
           options.spec,
@@ -271,8 +359,10 @@ export function createDebugger(config: DebuggerOptions = {}) {
           fragment,
           config.writeBack,
         );
-      } catch (e) {
-        writeBackSkippedReason = `write-back error: ${toErrorInfo(e).message}`;
+      } catch (error) {
+        writeBackSkippedReason = `write-back error: ${
+          toErrorInfo(error).message
+        }`;
       }
     }
 
@@ -288,55 +378,77 @@ export function createDebugger(config: DebuggerOptions = {}) {
     };
   }
 
-  /**
-   * Run several operations in order, threading the patched spec through
-   * so that repeated observations accumulate into one schema.
-   *
-   * `shared` is merged shallowly: a per-entry `variables` or `runner` replaces
-   * the shared one rather than being deep-merged, because `runner` is passed
-   * verbatim to postman-runtime and a partial merge there is hard to reason about.
-   */
   async function sendMany(
     spec: any,
     targets: Array<
-      { target: OperationTarget } & Partial<
-        Omit<SendOptions, "spec" | "target">
-      >
+      {
+        target: OperationTarget;
+      } & Partial<Omit<SendOptions, "spec" | "target">>
     >,
     shared: Partial<Omit<SendOptions, "spec" | "target">> = {},
   ): Promise<{
     spec: any;
-    results: Array<SendResult | { target: OperationTarget; error: string }>;
+    results: Array<
+      | SendResult
+      | {
+          target: OperationTarget;
+          error: string;
+        }
+    >;
   }> {
     let working = spec;
+
     const results: Array<
-      SendResult | { target: OperationTarget; error: string }
+      | SendResult
+      | {
+          target: OperationTarget;
+          error: string;
+        }
     > = [];
 
     for (const entry of targets) {
-      // Stop early rather than firing the remaining requests after a cancel.
       const signal = entry.signal ?? shared.signal;
+
       if (signal?.aborted) {
-        results.push({ target: entry.target, error: "aborted" });
+        results.push({
+          target: entry.target,
+          error: "aborted",
+        });
         continue;
       }
+
       try {
-        // Referenced directly so a destructured `sendMany` still works.
         const result = await send({
           ...shared,
           ...entry,
           spec: working,
         } as SendOptions);
-        if (result.patchedSpec) working = result.patchedSpec;
+
+        if (result.patchedSpec) {
+          working = result.patchedSpec;
+        }
+
         results.push(result);
-      } catch (e) {
-        results.push({ target: entry.target, error: toErrorInfo(e).message });
+      } catch (error) {
+        results.push({
+          target: entry.target,
+          error: toErrorInfo(error).message,
+        });
       }
     }
-    return { spec: working, results };
+
+    return {
+      spec: working,
+      results,
+    };
   }
 
-  return { registry, toCollection, send, sendMany };
+  return {
+    registry,
+    toCollection,
+    send,
+    sendMany,
+  };
 }
 
 export type ProtoKit = ReturnType<typeof createDebugger>;
