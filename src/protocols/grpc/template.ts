@@ -21,6 +21,10 @@ export interface OneofHint {
   /**
    * Per-branch shape, so a UI can switch branches without re-describing the
    * method. Values are the same proto3-JSON form the example uses.
+   *
+   * A branch may be absent here: a message-typed branch under
+   * fillMessageFields:false has no value to offer, and inventing `{}` for it
+   * would claim "set with all defaults" rather than "not set".
    */
   branchValues: Record<string, unknown>;
 }
@@ -47,11 +51,19 @@ export interface PresenceHint {
   /**
    * Explicit-presence field: omitting it and setting it to the zero value are
    * distinguishable on the wire, so the UI must not conflate them.
+   *
+   * Exactly one hint is emitted per path. An `optional` message field is
+   * reported as "proto3_optional" only — two entries for one path, each with
+   * its own presentInExample, would leave the UI no way to pick.
    */
   reason: "proto3_optional" | "message";
   /** Whether the generated example includes this key. */
   presentInExample: boolean;
-  /** Value to use if the user chooses to set it. */
+  /**
+   * Value to use if the user chooses to set it. Always computed, including when
+   * the example omits the key — that is the whole purpose of the hint, and
+   * re-describing the method to recover it is what these hints exist to avoid.
+   */
   valueIfSet: unknown;
 }
 
@@ -72,6 +84,16 @@ export interface MessageTemplate {
   /** Truncated recursion, unresolvable types, unsupported well-known types. */
   warnings: string[];
 }
+
+/**
+ * "This key must not appear at all", as distinct from undefined.
+ *
+ * Presence is observable on the wire, so `{ profile: undefined }` and `{}` are
+ * the same request but not the same document: the first renders as a field in
+ * any UI that walks Object.keys, and contradicts a presence hint that says
+ * presentInExample:false.
+ */
+const OMIT = Symbol("omit");
 
 const SCALAR_DEFAULTS: Record<string, unknown> = {
   TYPE_DOUBLE: 0,
@@ -169,7 +191,12 @@ interface Ctx {
   warnings: string[];
   /** Guards against infinite recursion on cyclic message graphs. */
   stack: string[];
-  /** Suppresses hint recording while probing alternative oneof branches. */
+  /**
+   * Suppresses hint recording. Raised while probing alternative oneof branches
+   * and while computing an `optional` field's valueIfSet — in both cases the
+   * paths being walked are not present in the example, so hints for them would
+   * point at fields the user cannot see.
+   */
   hintDepth: number;
 }
 
@@ -259,6 +286,16 @@ function warn(ctx: Ctx, message: string): void {
   if (recording(ctx)) ctx.warnings.push(message);
 }
 
+/** Runs `fn` with hint recording suppressed. */
+function withoutHints<T>(ctx: Ctx, fn: () => T): T {
+  ctx.hintDepth++;
+  try {
+    return fn();
+  } finally {
+    ctx.hintDepth--;
+  }
+}
+
 function lookupMessage(ctx: Ctx, fq: string): unknown | undefined {
   const entry = ctx.catalog.symbols.get(fq);
   if (entry?.kind === "message") return entry.type;
@@ -279,6 +316,11 @@ function lookupEnum(ctx: Ctx, fq: string): unknown | undefined {
  * symbols, so the only way to resolve one is through the declaring message's
  * nested types. There is no global-lookup fallback: pretending there is one
  * would hide a catalog regression behind a second code path.
+ *
+ * An unreadable nested type returns undefined rather than throwing. One
+ * unresolvable map field costs that field a warning and a degraded shape; it
+ * must not empty the whole template, which is what an escaping
+ * DescriptorShapeError would do.
  */
 function findMapEntry(
   ctx: Ctx,
@@ -289,13 +331,19 @@ function findMapEntry(
   if (!parent) return undefined;
 
   const shortName = entryFq.slice(entryFq.lastIndexOf(".") + 1);
-  for (const nested of readNestedTypes(parent)) {
-    if (String(pick(nested, "name", "name") ?? "") !== shortName) continue;
-    if (!isMapEntry(nested)) continue;
-    const fields = readFields(nested);
-    const key = fields.find((f) => f.name === "key");
-    const value = fields.find((f) => f.name === "value");
-    if (key && value) return { keyType: key.type, valueField: value };
+  try {
+    for (const nested of readNestedTypes(parent)) {
+      if (String(pick(nested, "name", "name") ?? "") !== shortName) continue;
+      if (!isMapEntry(nested)) continue;
+      const fields = readFields(nested);
+      const key = fields.find((f) => f.name === "key");
+      const value = fields.find((f) => f.name === "value");
+      if (key && value) return { keyType: key.type, valueField: value };
+    }
+  } catch (e) {
+    if (!(e instanceof DescriptorShapeError)) throw e;
+    // Caller warns and degrades to a plain repeated message field.
+    return undefined;
   }
   return undefined;
 }
@@ -380,23 +428,22 @@ function buildMessage(
         // Other branches are shaped for the UI but must not pollute the
         // top-level hint lists, or a user who never switches branches sees
         // enum/collection entries for paths that are not in the example.
-        const branchValues: Record<string, unknown> = {
-          [ctx.keyOf(chosen)]: chosenValue,
-        };
-        ctx.hintDepth++;
-        try {
+        const branchValues: Record<string, unknown> = {};
+        if (chosenValue !== OMIT) {
+          branchValues[ctx.keyOf(chosen)] = chosenValue;
+        }
+        withoutHints(ctx, () => {
           for (const m of members.slice(1)) {
-            branchValues[ctx.keyOf(m)] = buildFieldValue(
+            const v = buildFieldValue(
               ctx,
               fq,
               m,
               joinPath(path, m.name),
               depth,
             );
+            if (v !== OMIT) branchValues[ctx.keyOf(m)] = v;
           }
-        } finally {
-          ctx.hintDepth--;
-        }
+        });
 
         if (recording(ctx)) {
           ctx.oneofs.push({
@@ -407,26 +454,37 @@ function buildMessage(
             branchValues,
           });
         }
-        out[ctx.keyOf(chosen)] = chosenValue;
+        if (chosenValue !== OMIT) out[ctx.keyOf(chosen)] = chosenValue;
         continue;
       }
 
       // --- explicit presence: describe, do not silently set -----------------
       if (field.proto3Optional) {
-        const valueIfSet = buildFieldValue(ctx, fq, field, fieldPath, depth);
+        // Hints are suppressed while computing the value: this field's presence
+        // is described by the entry pushed below, and a message-typed
+        // `optional` would otherwise also emit a "message" hint for the same
+        // path with a contradictory presentInExample. Anything inside the value
+        // only exists once the user adds the field back, and its shape travels
+        // in valueIfSet.
+        const valueIfSet = withoutHints(ctx, () =>
+          buildFieldValue(ctx, fq, field, fieldPath, depth),
+        );
         if (recording(ctx)) {
           ctx.presence.push({
             at: fieldPath,
             reason: "proto3_optional",
             presentInExample: ctx.fillExplicitOptional,
-            valueIfSet,
+            valueIfSet: valueIfSet === OMIT ? undefined : valueIfSet,
           });
         }
-        if (ctx.fillExplicitOptional) out[key] = valueIfSet;
+        if (ctx.fillExplicitOptional && valueIfSet !== OMIT) {
+          out[key] = valueIfSet;
+        }
         continue;
       }
 
-      out[key] = buildFieldValue(ctx, fq, field, fieldPath, depth);
+      const value = buildFieldValue(ctx, fq, field, fieldPath, depth);
+      if (value !== OMIT) out[key] = value;
     }
 
     return out;
@@ -461,15 +519,17 @@ function buildFieldValue(
       }
       if (!ctx.seedCollections) return {};
       const sampleKey = mapInfo.keyType === "TYPE_STRING" ? "key" : "0";
-      return {
-        [sampleKey]: buildSingularValue(
-          ctx,
-          parentFq,
-          mapInfo.valueField,
-          `${path}.${sampleKey}`,
-          depth,
-        ),
-      };
+      const sampleValue = buildSingularValue(
+        ctx,
+        parentFq,
+        mapInfo.valueField,
+        `${path}.${sampleKey}`,
+        depth,
+      );
+      // Presence applies to a field, not to a map's values: a map with one
+      // entry whose value is omitted is not representable, so the sample entry
+      // is dropped instead and the user starts from an empty map.
+      return sampleValue === OMIT ? {} : { [sampleKey]: sampleValue };
     }
     // A repeated message whose entry type resolves to nothing: treat as a
     // plain repeated message field, but say so — silently emitting `[]` for
@@ -490,7 +550,16 @@ function buildFieldValue(
       });
     }
     if (!ctx.seedCollections) return [];
-    return [buildSingularValue(ctx, parentFq, field, `${path}[0]`, depth)];
+    const element = buildSingularValue(
+      ctx,
+      parentFq,
+      field,
+      `${path}[0]`,
+      depth,
+    );
+    // Same reasoning as maps: an omitted element means an empty list, never a
+    // hole in one. `[undefined]` would serialise as a null element.
+    return element === OMIT ? [] : [element];
   }
 
   return buildSingularValue(ctx, parentFq, field, path, depth);
@@ -512,11 +581,8 @@ function buildSingularValue(
       try {
         values = readEnumValueNames(enumType);
       } catch (e) {
-        warn(
-          ctx,
-          `enum "${fq}" at "${path}" is unreadable: ` +
-            `${e instanceof Error ? e.message : String(e)}`,
-        );
+        if (!(e instanceof DescriptorShapeError)) throw e;
+        warn(ctx, `enum "${fq}" at "${path}" is unreadable: ${e.message}`);
       }
     }
     if (values.length === 0) {
@@ -554,17 +620,20 @@ function buildSingularValue(
     }
     if (fq in WELL_KNOWN) return WELL_KNOWN[fq];
 
-    // Message-typed fields always have explicit presence.
+    // Message-typed fields always have explicit presence. The value is built
+    // whether or not the example keeps it: a hint whose valueIfSet is undefined
+    // tells the UI nothing, and re-describing the method just to re-add a
+    // removed field is exactly what these hints exist to avoid.
+    const value = buildMessage(ctx, fq, path, depth + 1) ?? {};
     if (recording(ctx)) {
       ctx.presence.push({
         at: path,
         reason: "message",
         presentInExample: ctx.fillMessageFields,
-        valueIfSet: undefined,
+        valueIfSet: value,
       });
     }
-    if (!ctx.fillMessageFields) return undefined;
-    return buildMessage(ctx, fq, path, depth + 1) ?? {};
+    return ctx.fillMessageFields ? value : OMIT;
   }
 
   if (field.type in SCALAR_DEFAULTS) return SCALAR_DEFAULTS[field.type];

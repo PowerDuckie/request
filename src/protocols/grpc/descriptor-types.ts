@@ -125,7 +125,7 @@ function requireNumber(
   owner: string,
 ): number {
   const v = pick(obj, camel, snake);
-  const n = typeof v === "string" ? Number(v) : v;
+    const n = typeof v === "string" && v.trim() !== "" ? Number(v) : v;
   if (typeof n !== "number" || !Number.isFinite(n)) {
     throw new DescriptorShapeError(
       `${owner}.${snake} to be a number`,
@@ -139,7 +139,7 @@ function requireNumber(
 /** Descriptor bools are frequently omitted when false — that is legitimate. */
 function readBool(obj: unknown, camel: string, snake: string): boolean {
   const v = pick(obj, camel, snake);
-  return v === true;
+  return v === true || v === 1 || v === "true";
 }
 
 /* ------------------------------------------------------------------ *
@@ -236,13 +236,13 @@ export function enumName(
 export function isMessageDescriptor(v: unknown): boolean {
   if (!v || typeof v !== "object") return false;
   if (!has(v, "name", "name")) return false;
-  return (
-    has(v, "field", "field") ||
-    has(v, "nestedType", "nested_type") ||
-    has(v, "oneofDecl", "oneof_decl") ||
-    has(v, "enumType", "enum_type") ||
-    has(v, "options", "options")
-  );
+  // ServiceDescriptorProto: only it has `method`.
+  if (has(v, "method", "method")) return false;
+  // EnumDescriptorProto: `value` is its members. A message never has one.
+  if (has(v, "value", "value")) return false;
+  // proto-loader runtime objects carry no `name` at all, but check anyway:
+  // the failure this guards against is worth two comparisons.
+  return !looksLikeRuntimeServiceObject(v);
 }
 
 export function isServiceDescriptor(v: unknown): boolean {
