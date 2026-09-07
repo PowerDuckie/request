@@ -1,6 +1,6 @@
 {
   "info": {
-    "_postman_id": "protokit-mtqdxjpm",
+    "_postman_id": "protokit-mtr1lc23-6en3",
     "name": "Demo API",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
@@ -11,7 +11,7 @@
         {
           "listen": "test",
           "script": {
-            "id": "protokit-test-0",
+            "id": "protokit-item-test-0",
             "type": "text/javascript",
             "exec": [
               "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
@@ -23,7 +23,7 @@
         {
           "listen": "test",
           "script": {
-            "id": "protokit-test-1",
+            "id": "protokit-item-test-1",
             "type": "text/javascript",
             "exec": [
               "pm.test('ok', function () { pm.response.to.be.ok; });"
@@ -70,7 +70,7 @@
   "variable": [
     {
       "key": "baseUrl",
-      "value": "http://127.0.0.1:4000/v1"
+      "value": "http://cc.apipost.cc:6002"
     }
   ],
   "auth": {
@@ -87,7 +87,7 @@
     {
       "listen": "prerequest",
       "script": {
-        "id": "protokit-prerequest-0",
+        "id": "protokit-collection-prerequest-0",
         "type": "text/javascript",
         "exec": [
           "pm.environment.set('requestStartedAt', Date.now().toString());"

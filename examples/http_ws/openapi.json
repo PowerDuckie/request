@@ -3,11 +3,11 @@
   "info": { "title": "Demo API", "version": "1.0.0" },
   "servers": [
     {
-      "url": "https://{host}/v1",
+      "url": "http://{host}/",
       "variables": {
         "host": {
-          "default": "api.example.com",
-          "enum": ["api.example.com", "staging.example.com"]
+          "default": "cc.apipost.cc:6002",
+          "enum": ["cc.apipost.cc:6002"]
         }
       }
     }

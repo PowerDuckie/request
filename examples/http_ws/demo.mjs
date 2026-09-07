@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
-import { createDebugger, BUILTIN_CAPTURE_TEST } from "../dist/index.cjs";
+import { createDebugger, BUILTIN_CAPTURE_TEST } from "../../dist/index.js";
 
 const spec = JSON.parse(
   await fs.readFile(new URL("./openapi.json", import.meta.url), "utf8"),
 );
-const BASE_URL = process.env.BASE_URL ?? "https://api.example.com/v1";
+const BASE_URL = process.env.BASE_URL ?? "http://cc.apipost.cc:6002";
 const TOKEN = process.env.API_TOKEN ?? "";
 
 const pk = createDebugger({
@@ -31,7 +31,7 @@ const httpResult = await pk.send({
     query: { include: ["profile", "roles"] },
   },
   serverUrl: BASE_URL,
-  serverVariables: { host: "api.example.com" },
+  serverVariables: { host: "cc.apipost.cc:6002" },
   variables: { tenantId: "acme" },
   globals: { appVersion: "2.3.1" },
   auth: { type: "bearer", token: TOKEN },

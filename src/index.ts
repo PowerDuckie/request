@@ -2,6 +2,8 @@ import { AdapterRegistry } from "./core/registry";
 import type { ProtocolAdapter, ExecuteContext } from "./core/protocol";
 import { HttpAdapter } from "./protocols/http";
 import { WebSocketAdapter } from "./protocols/ws";
+import { GraphQLAdapter } from "./protocols/graphql";
+import { McpAdapter } from "./protocols/mcp";
 import { locateOperation, type LocatedOperation } from "./openapi/locate";
 import {
   toResponseObject,
@@ -38,6 +40,62 @@ export { WebSocketAdapter } from "./protocols/ws";
 export { BUILTIN_CAPTURE_TEST } from "./protocols/http/scripts";
 export { SseParser } from "./protocols/http/sse-parser";
 
+export { GraphQLAdapter } from "./protocols/graphql";
+export { resolveGraphQLConfig } from "./protocols/graphql/config";
+export {
+  introspectSchema,
+  INTROSPECTION_QUERY,
+} from "./protocols/graphql/introspection";
+export type {
+  IntrospectedSchema,
+  IntrospectionResult,
+  GraphQLNamedType,
+  GraphQLFieldInfo,
+  GraphQLArg,
+  GraphQLTypeRef,
+} from "./protocols/graphql/introspection";
+export {
+  generateOperation,
+  generateAllOperations,
+} from "./protocols/graphql/generate";
+export type { GeneratedOperation } from "./protocols/graphql/generate";
+export {
+  writeGraphQLOperations,
+  discoverAndWriteGraphQLSchema,
+} from "./protocols/graphql/writeback";
+export type {
+  WriteGraphQLOptions,
+  DiscoverAndWriteResult as DiscoverAndWriteGraphQLResult,
+} from "./protocols/graphql/writeback";
+
+export { McpAdapter } from "./protocols/mcp";
+export { resolveMcpConfig } from "./protocols/mcp/config";
+export {
+  initializeSession as initializeMcpSession,
+  discoverMcpCapabilities,
+  MCP_PROTOCOL_VERSION,
+} from "./protocols/mcp/discovery";
+export type {
+  McpCapability,
+  McpTool,
+  McpResource,
+  McpPrompt,
+  McpDiscoveryResult,
+} from "./protocols/mcp/discovery";
+export {
+  generateMcpCall,
+  generateAllMcpCalls,
+} from "./protocols/mcp/generate";
+export type { GeneratedMcpCall } from "./protocols/mcp/generate";
+export {
+  writeMcpOperations,
+  discoverAndWriteMcpCapabilities,
+} from "./protocols/mcp/writeback";
+export type {
+  WriteMcpOptions,
+  DiscoverAndWriteMcpResult,
+} from "./protocols/mcp/writeback";
+
 export interface DebuggerOptions {
   /** Replaces the default adapter set when provided. */
   adapters?: ProtocolAdapter<any>[];
@@ -71,7 +129,12 @@ export interface PlanResult {
 
 export function createDebugger(config: DebuggerOptions = {}) {
   const registry = new AdapterRegistry();
-  const base = config.adapters ?? [new HttpAdapter(), new WebSocketAdapter()];
+  const base = config.adapters ?? [
+    new HttpAdapter(),
+    new WebSocketAdapter(),
+    new GraphQLAdapter(),
+    new McpAdapter(),
+  ];
   for (const adapter of [...base, ...(config.extraAdapters ?? [])])
     registry.register(adapter);
 

@@ -1,0 +1,67 @@
+{
+  "name": "@powerduck/request",
+  "version": "0.1.0",
+  "description": "OpenAPI-driven request debugger: HTTP, SSE, WebSocket, gRPC, GraphQL and MCP over one send()/createDebugger() API.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./grpc": {
+      "types": "./dist/protocols/grpc/index.d.ts",
+      "import": "./dist/protocols/grpc/index.js",
+      "require": "./dist/protocols/grpc/index.cjs"
+    },
+    "./graphql": {
+      "types": "./dist/protocols/graphql/index.d.ts",
+      "import": "./dist/protocols/graphql/index.js",
+      "require": "./dist/protocols/graphql/index.cjs"
+    },
+    "./mcp": {
+      "types": "./dist/protocols/mcp/index.d.ts",
+      "import": "./dist/protocols/mcp/index.js",
+      "require": "./dist/protocols/mcp/index.cjs"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup",
+    "dev:http_ws:server": "node examples/http_ws/local-server.mjs",
+    "dev:http_ws:demo": "node examples/http_ws/demo.mjs",
+    "dev:graphql:server": "node examples/graphql/server.mjs",
+    "dev:graphql:demo": "node examples/graphql/demo.mjs",
+    "dev:mcp:server": "node examples/mcp/server.mjs",
+    "dev:mcp:demo": "node examples/mcp/demo.mjs",
+    "dev:grpc:server": "node examples/grpc/server.mjs",
+    "dev:grpc:demo": "node examples/grpc/client.mjs"
+  },
+  "dependencies": {
+    "postman-collection": "^4.4.0",
+    "postman-runtime": "^7.39.0",
+    "ws": "^8.18.0"
+  },
+  "peerDependencies": {
+    "@grpc/grpc-js": "^1.10.0",
+    "@grpc/proto-loader": "^0.7.0",
+    "@grpc/reflection": "^1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@grpc/grpc-js": { "optional": true },
+    "@grpc/proto-loader": { "optional": true },
+    "@grpc/reflection": { "optional": true }
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0",
+    "graphql": "^16.9.0",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.0",
+    "zod": "^3.23.0"
+  }
+}

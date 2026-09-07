@@ -6,7 +6,13 @@ export type Json =
   | Json[]
   | { [key: string]: Json };
 
-export type ProtocolName = "http" | "sse" | "websocket" | "grpc" | "mcp";
+export type ProtocolName =
+  | "http"
+  | "sse"
+  | "websocket"
+  | "grpc"
+  | "graphql"
+  | "mcp";
 
 /**
  * An OpenAPI 3.2 document. Kept loose on purpose: the toolkit tolerates
@@ -374,6 +380,43 @@ export interface WebSocketOptions {
   maxPayloadBytes?: number;
 }
 
+/** GraphQL-specific execution options. */
+export interface GraphQLOptions {
+  /** Absolute HTTP(S) URL of the GraphQL endpoint. Overrides the resolved server URL. */
+  endpoint?: string;
+  /** Query or mutation document. Overrides whatever `x-graphql.query` declares. */
+  query?: string;
+  /** Name of the operation to run, required when `query` declares more than one. */
+  operationName?: string;
+  /** GraphQL variables. Merged over any sampled from `x-graphql.variablesSchema`. */
+  variables?: Record<string, unknown>;
+  /** Extra headers, merged over `values.header` and auth. */
+  headers?: Record<string, string>;
+  /**
+   * Use HTTP GET with querystring-encoded `query`/`variables` instead of a
+   * POST body. Some CDN-fronted endpoints require this for cached reads.
+   */
+  useGet?: boolean;
+}
+
+/** MCP-specific execution options (Streamable HTTP transport). */
+export interface McpOptions {
+  /** Absolute HTTP(S) URL of the MCP server endpoint. */
+  endpoint?: string;
+  /** JSON-RPC method to invoke, e.g. "tools/call", "resources/read", "prompts/get". */
+  method?: string;
+  /** Tool/resource/prompt name. Folded into `params.name` for tools and prompts. */
+  name?: string;
+  /** Arguments passed as `params.arguments` (tools) or `params` (others). */
+  arguments?: Record<string, unknown>;
+  /** Extra headers, merged over `values.header` and auth. */
+  headers?: Record<string, string>;
+  /** Reuse a previously issued session id instead of re-initializing. */
+  sessionId?: string;
+  /** Client identity sent during the `initialize` handshake. */
+  clientInfo?: { name: string; version: string };
+}
+
 /** Bounds applied to the incremental SSE parser itself. */
 export interface StreamParserOptions {
   // added
@@ -417,6 +460,10 @@ export interface SendOptions extends StreamParserOptions {
   runner?: RuntimeRunOptions;
   /** WebSocket options, used by the ws adapter. */
   websocket?: WebSocketOptions;
+  /** GraphQL options, used by the graphql adapter. */
+  graphql?: GraphQLOptions;
+  /** MCP options, used by the mcp adapter. */
+  mcp?: McpOptions;
 
   /** Convenience shortcut, equivalent to runner.timeout.request. */
   timeout?: number;
