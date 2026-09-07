@@ -1,0 +1,602 @@
+{
+  "openapi": "3.2.0",
+  "info": {
+    "title": "MCP Demo",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:4200/mcp"
+    }
+  ],
+  "paths": {
+    "/mcp/tools/echo": {
+      "post": {
+        "operationId": "mcp_tool_echo",
+        "summary": "MCP tool: echo",
+        "description": "Echo the given text back verbatim.",
+        "x-protocol": "mcp",
+        "x-mcp": {
+          "endpoint": "http://127.0.0.1:4200/mcp",
+          "method": "tools/call",
+          "name": "echo",
+          "argumentsSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Text to echo"
+              }
+            },
+            "required": [
+              "text"
+            ]
+          },
+          "arguments": {
+            "text": "string"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Text to echo"
+                  }
+                },
+                "required": [
+                  "text"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "MCP JSON-RPC result.",
+            "headers": {
+              "cache-control": {
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "no-cache, no-transform"
+                  ]
+                }
+              },
+              "mcp-session-id": {
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "781c9650-30dc-49cf-97d8-b492f0bc3c64"
+                  ]
+                }
+              },
+              "x-accel-buffering": {
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "no"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "content": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "examples": [
+                              "text"
+                            ]
+                          },
+                          "text": {
+                            "type": "string",
+                            "examples": [
+                              "hello from the mcp adapter"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "text"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "content"
+                  ]
+                },
+                "examples": {
+                  "capturedSample": {
+                    "summary": "Captured from a live call",
+                    "value": {
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "hello from the mcp adapter"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/tools/add": {
+      "post": {
+        "operationId": "mcp_tool_add",
+        "summary": "MCP tool: add",
+        "description": "Add two numbers.",
+        "x-protocol": "mcp",
+        "x-mcp": {
+          "endpoint": "http://127.0.0.1:4200/mcp",
+          "method": "tools/call",
+          "name": "add",
+          "argumentsSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {
+              "a": {
+                "type": "number"
+              },
+              "b": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "a",
+              "b"
+            ]
+          },
+          "arguments": {
+            "a": 0,
+            "b": 0
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                  "a": {
+                    "type": "number"
+                  },
+                  "b": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "a",
+                  "b"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "MCP JSON-RPC result.",
+            "headers": {
+              "cache-control": {
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "no-cache, no-transform"
+                  ]
+                }
+              },
+              "mcp-session-id": {
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "2eed5cad-cf69-474f-b7e2-e80f2f01a579"
+                  ]
+                }
+              },
+              "x-accel-buffering": {
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "no"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "content": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "examples": [
+                              "text"
+                            ]
+                          },
+                          "text": {
+                            "type": "string",
+                            "examples": [
+                              "42"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "text"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "content"
+                  ]
+                },
+                "examples": {
+                  "capturedSample": {
+                    "summary": "Captured from a live call",
+                    "value": {
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "42"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/tools/get_weather": {
+      "post": {
+        "operationId": "mcp_tool_get_weather",
+        "summary": "MCP tool: get_weather",
+        "description": "Fake weather lookup for a city (demo data, not a real API).",
+        "x-protocol": "mcp",
+        "x-mcp": {
+          "endpoint": "http://127.0.0.1:4200/mcp",
+          "method": "tools/call",
+          "name": "get_weather",
+          "argumentsSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "city"
+            ]
+          },
+          "arguments": {
+            "city": "string"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "MCP JSON-RPC result."
+          }
+        }
+      }
+    },
+    "/mcp/resources/config": {
+      "post": {
+        "operationId": "mcp_resource_config",
+        "summary": "MCP resource: config",
+        "description": "Static demo configuration.",
+        "x-protocol": "mcp",
+        "x-mcp": {
+          "endpoint": "http://127.0.0.1:4200/mcp",
+          "method": "resources/read",
+          "uri": "config://app",
+          "argumentsSchema": {
+            "type": "object",
+            "properties": {
+              "uri": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "uri"
+            ]
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "uri": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uri"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "MCP JSON-RPC result.",
+            "headers": {
+              "cache-control": {
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "no-cache, no-transform"
+                  ]
+                }
+              },
+              "mcp-session-id": {
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "1b538604-a020-4132-9cc9-6485cd2abdc4"
+                  ]
+                }
+              },
+              "x-accel-buffering": {
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "no"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "jsonrpc": {
+                      "type": "string",
+                      "examples": [
+                        "2.0"
+                      ]
+                    },
+                    "id": {
+                      "type": "integer",
+                      "examples": [
+                        11
+                      ]
+                    },
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "examples": [
+                            -32603
+                          ]
+                        },
+                        "message": {
+                          "type": "string",
+                          "examples": [
+                            "Invalid URL"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "jsonrpc",
+                    "id",
+                    "error"
+                  ]
+                },
+                "examples": {
+                  "capturedSample": {
+                    "summary": "Captured from a live call",
+                    "value": {
+                      "jsonrpc": "2.0",
+                      "id": 11,
+                      "error": {
+                        "code": -32603,
+                        "message": "Invalid URL"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/prompts/summarize": {
+      "post": {
+        "operationId": "mcp_prompt_summarize",
+        "summary": "MCP prompt: summarize",
+        "description": "Ask the model to summarize a piece of text.",
+        "x-protocol": "mcp",
+        "x-mcp": {
+          "endpoint": "http://127.0.0.1:4200/mcp",
+          "method": "prompts/get",
+          "name": "summarize",
+          "argumentsSchema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ]
+          },
+          "arguments": {
+            "text": "string"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "text"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "MCP JSON-RPC result.",
+            "headers": {
+              "cache-control": {
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "no-cache, no-transform"
+                  ]
+                }
+              },
+              "mcp-session-id": {
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "80119ba4-3465-4c88-b334-39e602f4998e"
+                  ]
+                }
+              },
+              "x-accel-buffering": {
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "no"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "messages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "role": {
+                            "type": "string",
+                            "examples": [
+                              "user"
+                            ]
+                          },
+                          "content": {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "examples": [
+                                  "text"
+                                ]
+                              },
+                              "text": {
+                                "type": "string",
+                                "examples": [
+                                  "Summarize the following in one sentence:\n\nProtoKit now speaks GraphQL and MCP."
+                                ]
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "text"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "role",
+                          "content"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "messages"
+                  ]
+                },
+                "examples": {
+                  "capturedSample": {
+                    "summary": "Captured from a live call",
+                    "value": {
+                      "messages": [
+                        {
+                          "role": "user",
+                          "content": {
+                            "type": "text",
+                            "text": "Summarize the following in one sentence:\n\nProtoKit now speaks GraphQL and MCP."
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

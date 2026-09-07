@@ -1,0 +1,273 @@
+{
+  "openapi": "3.2.0",
+  "info": {
+    "title": "MCP Demo",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:4200/mcp"
+    }
+  ],
+  "paths": {
+    "/mcp/tools/echo": {
+      "post": {
+        "operationId": "mcp_tool_echo",
+        "summary": "MCP tool: echo",
+        "description": "Echo the given text back verbatim.",
+        "x-protocol": "mcp",
+        "x-mcp": {
+          "endpoint": "http://127.0.0.1:4200/mcp",
+          "method": "tools/call",
+          "name": "echo",
+          "argumentsSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Text to echo"
+              }
+            },
+            "required": [
+              "text"
+            ]
+          },
+          "arguments": {
+            "text": "string"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Text to echo"
+                  }
+                },
+                "required": [
+                  "text"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "MCP JSON-RPC result."
+          }
+        }
+      }
+    },
+    "/mcp/tools/add": {
+      "post": {
+        "operationId": "mcp_tool_add",
+        "summary": "MCP tool: add",
+        "description": "Add two numbers.",
+        "x-protocol": "mcp",
+        "x-mcp": {
+          "endpoint": "http://127.0.0.1:4200/mcp",
+          "method": "tools/call",
+          "name": "add",
+          "argumentsSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {
+              "a": {
+                "type": "number"
+              },
+              "b": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "a",
+              "b"
+            ]
+          },
+          "arguments": {
+            "a": 0,
+            "b": 0
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                  "a": {
+                    "type": "number"
+                  },
+                  "b": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "a",
+                  "b"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "MCP JSON-RPC result."
+          }
+        }
+      }
+    },
+    "/mcp/tools/get_weather": {
+      "post": {
+        "operationId": "mcp_tool_get_weather",
+        "summary": "MCP tool: get_weather",
+        "description": "Fake weather lookup for a city (demo data, not a real API).",
+        "x-protocol": "mcp",
+        "x-mcp": {
+          "endpoint": "http://127.0.0.1:4200/mcp",
+          "method": "tools/call",
+          "name": "get_weather",
+          "argumentsSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "city"
+            ]
+          },
+          "arguments": {
+            "city": "string"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "MCP JSON-RPC result."
+          }
+        }
+      }
+    },
+    "/mcp/resources/config": {
+      "post": {
+        "operationId": "mcp_resource_config",
+        "summary": "MCP resource: config",
+        "description": "Static demo configuration.",
+        "x-protocol": "mcp",
+        "x-mcp": {
+          "endpoint": "http://127.0.0.1:4200/mcp",
+          "method": "resources/read",
+          "uri": "config://app",
+          "argumentsSchema": {
+            "type": "object",
+            "properties": {
+              "uri": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "uri"
+            ]
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "uri": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uri"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "MCP JSON-RPC result."
+          }
+        }
+      }
+    },
+    "/mcp/prompts/summarize": {
+      "post": {
+        "operationId": "mcp_prompt_summarize",
+        "summary": "MCP prompt: summarize",
+        "description": "Ask the model to summarize a piece of text.",
+        "x-protocol": "mcp",
+        "x-mcp": {
+          "endpoint": "http://127.0.0.1:4200/mcp",
+          "method": "prompts/get",
+          "name": "summarize",
+          "argumentsSchema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ]
+          },
+          "arguments": {
+            "text": "string"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "text"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "MCP JSON-RPC result."
+          }
+        }
+      }
+    }
+  }
+}

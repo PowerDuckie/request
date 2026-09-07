@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import {
   createDebugger,
   discoverAndWriteGraphQLSchema,
-} from "../../dist/index.cjs";
+} from "../../dist/index.js";
 
 const ENDPOINT = process.env.GRAPHQL_URL ?? "http://127.0.0.1:4100/graphql";
 
@@ -26,7 +26,7 @@ let spec = {
 const discovered = await discoverAndWriteGraphQLSchema(spec, ENDPOINT);
 spec = discovered.spec;
 
-console.log(`discovered ${discovered.operations.length} operation(s):`);
+console.log(spec, `discovered ${discovered.operations.length} operation(s):`);
 for (const op of discovered.operations) {
   console.log(`  ${op.operationType.padEnd(8)} ${op.fieldName}`);
 }
@@ -70,7 +70,11 @@ const createPostResult = await pk.send({
   target: { operationId: "graphql_mutation_createPost" },
   graphql: {
     variables: {
-      input: { title: "Shipped it", body: "The MCP + GraphQL adapters are in.", authorId: "2" },
+      input: {
+        title: "Shipped it",
+        body: "The MCP + GraphQL adapters are in.",
+        authorId: "2",
+      },
     },
   },
 });
@@ -104,4 +108,6 @@ await fs.writeFile(
   JSON.stringify(spec, null, 2),
   "utf8",
 );
-console.log("\npatched spec (with response examples) written to openapi.patched.json");
+console.log(
+  "\npatched spec (with response examples) written to openapi.patched.json",
+);

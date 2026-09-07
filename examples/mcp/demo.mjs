@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import {
   createDebugger,
   discoverAndWriteMcpCapabilities,
-} from "../../dist/index.cjs";
+} from "../../dist/index.js";
 
 const ENDPOINT = process.env.MCP_URL ?? "http://127.0.0.1:4200/mcp";
 
