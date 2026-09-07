@@ -320,6 +320,14 @@ function decodeService(buf: Uint8Array): DecodedService {
   };
 }
 
+function utf8(bytes: Uint8Array, what: string): string {
+  try {
+    return decoder.decode(bytes);
+  } catch {
+    throw new DescriptorDecodeError(`${what} is not valid UTF-8`);
+  }
+}
+
 /** Decodes a single FileDescriptorProto. */
 export function decodeFileDescriptorProto(buf: Uint8Array): DecodedFile {
   const f = decodeMessage(buf);
@@ -327,22 +335,37 @@ export function decodeFileDescriptorProto(buf: Uint8Array): DecodedFile {
     name: str(f, 1),
     package: str(f, 2),
     syntax: str(f, 12),
-    dependency: subs(f, 3).map((b) => decoder.decode(b)),
+    dependency: subs(f, 3).map((b) =>
+      utf8(b, "FileDescriptorProto.dependency"),
+    ),
     message_type: subs(f, 4).map((b) => decodeMessageType(b)),
     enum_type: subs(f, 5).map(decodeEnum),
     service: subs(f, 6).map(decodeService),
   };
 }
 
-/** Decodes a FileDescriptorSet (repeated FileDescriptorProto, field 1). */
 export function decodeFileDescriptorSet(buf: Uint8Array): DecodedFile[] {
   const s = decodeMessage(buf);
   const files = subs(s, 1);
-  if (files.length === 0 && buf.length > 0) {
+
+  // A FileDescriptorSet has exactly one field. Anything else means these bytes
+  // are a different message — in practice a bare FileDescriptorProto, whose
+  // field 1 is `name` rather than `file`, so it would otherwise decode as one
+  // garbage "file" built from the filename's own bytes.
+  const stray = [...s.keys()].filter((n) => n !== 1);
+  if (stray.length > 0) {
     throw new DescriptorDecodeError(
-      "FileDescriptorSet contained no files; the buffer may be a bare " +
-        "FileDescriptorProto rather than a set",
+      `expected a FileDescriptorSet but the message also carries field(s) ` +
+        `${stray.sort((a, b) => a - b).join(", ")}. These bytes are most ` +
+        `likely a bare FileDescriptorProto; decode it with ` +
+        `decodeFileDescriptorProto instead.`,
     );
+  }
+
+  if (files.length === 0) {
+    // Distinguished from the above on purpose: an empty set is a well-formed
+    // answer meaning "nothing to describe", and the caller reports it as such.
+    return [];
   }
   return files.map(decodeFileDescriptorProto);
 }

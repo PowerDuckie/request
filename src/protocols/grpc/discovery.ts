@@ -244,43 +244,6 @@ function mergeService(
   };
 }
 
-/**
- * Lists every service and method reachable from the endpoint, from the local
- * proto tree or from server reflection. This is the discovery half of the
- * workflow: pick a method, then fill in values.
- *
- * The service list is the union of both views. A service that is callable but
- * undescribed still appears — dropping it would leave the user with a note
- * about a service they cannot see.
- */
-export async function discover(
-  endpoint: GrpcEndpoint,
-): Promise<DiscoveryResult> {
-  const { catalog, packageDefinition } = await buildCatalog(endpoint);
-  const notes = [...catalog.notes];
-
-  const allServices = [
-    ...new Set([...catalog.services, ...catalog.invocableServices]),
-  ].sort();
-
-  const services = allServices.map((fqService) =>
-    mergeService(
-      fqService,
-      readDescriptorMethods(catalog, fqService, notes),
-      readRuntimeMethods(packageDefinition, fqService),
-      notes,
-    ),
-  );
-
-  return {
-    address: endpoint.address,
-    source: catalog.source,
-    services,
-    files: catalog.files,
-    notes,
-  };
-}
-
 export interface MethodDetail extends DiscoveredMethod {
   service: string;
   /** Editable request body plus the structural choices the schema leaves open. */
@@ -456,32 +419,87 @@ export function describeFromCatalog(
 
   // readMethods guarantees non-empty type names, so these are unconditional.
   let request: MessageTemplate | undefined;
-  try {
-    request = buildMessageTemplate(catalog, base.inputType!, templateOptions);
-  } catch (e) {
-    if (e instanceof DescriptorShapeError) {
-      notes.push(`request template unavailable: ${e.message}`);
-    } else {
-      throw e;
+  if (base.inputType === undefined) {
+    notes.push(
+      `the request type of ${service}/${base.name} is unknown, so no template ` +
+        `can be built.`,
+    );
+  } else {
+    try {
+      request = buildMessageTemplate(catalog, base.inputType, templateOptions);
+    } catch (e) {
+      if (e instanceof DescriptorShapeError) {
+        notes.push(`request template unavailable: ${e.message}`);
+      } else throw e;
     }
   }
 
   let response: MessageTemplate | undefined;
   if (options.includeResponse) {
-    try {
-      response = buildMessageTemplate(
-        catalog,
-        base.outputType!,
-        templateOptions,
+    if (base.outputType === undefined) {
+      notes.push(
+        `the response type of ${service}/${base.name} is unknown, so its shape ` +
+          `is unavailable.`,
       );
-    } catch (e) {
-      if (e instanceof DescriptorShapeError) {
-        notes.push(`response shape unavailable: ${e.message}`);
-      } else {
-        throw e;
+    } else {
+      try {
+        response = buildMessageTemplate(
+          catalog,
+          base.outputType,
+          templateOptions,
+        );
+      } catch (e) {
+        if (e instanceof DescriptorShapeError) {
+          notes.push(`response shape unavailable: ${e.message}`);
+        } else throw e;
       }
     }
   }
 
   return { ...base, service, request, response, notes };
+}
+
+/**
+ * Enumerates services from an already-built catalog.
+ *
+ * Split out so a caller holding a catalog — the adapter's cache, or a UI that
+ * already listed services — never rebuilds it just to re-enumerate. Under
+ * reflection a rebuild also means observing a server that may have been
+ * redeployed in between, so the two results could legitimately disagree.
+ */
+export function discoverFromCatalog(
+  endpoint: GrpcEndpoint,
+  catalog: Catalog,
+  packageDefinition: Record<string, unknown>,
+): DiscoveryResult {
+  const notes = [...catalog.notes];
+
+  const allServices = [
+    ...new Set([...catalog.services, ...catalog.invocableServices]),
+  ].sort();
+
+  const services = allServices.map((fqService) =>
+    mergeService(
+      fqService,
+      readDescriptorMethods(catalog, fqService, notes),
+      readRuntimeMethods(packageDefinition, fqService),
+      notes,
+    ),
+  );
+
+  return {
+    address: endpoint.address,
+    source: catalog.source,
+    services,
+    files: catalog.files,
+    notes,
+  };
+}
+
+/** Builds a catalog for the endpoint, then enumerates it. */
+export async function discover(
+  endpoint: GrpcEndpoint,
+): Promise<DiscoveryResult> {
+  const { catalog, packageDefinition } = await buildCatalog(endpoint);
+  return discoverFromCatalog(endpoint, catalog, packageDefinition);
 }

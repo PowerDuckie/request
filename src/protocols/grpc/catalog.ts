@@ -1,6 +1,6 @@
 import { loadGrpc, requireCapability } from "./loader.js";
 import { buildCredentialsChecked } from "./credentials.js";
-import { collectProtoFiles, deriveIncludeDirs } from "./proto-dir.js";
+import { scanProtoFiles, deriveIncludeDirsDetailed } from "./proto-dir.js";
 import { fetchFullDescriptorSet } from "./reflection.js";
 import {
   decodeFileDescriptorProto,
@@ -50,12 +50,8 @@ export interface Catalog {
   serviceDescriptors: Map<string, unknown>;
   /** Non-fatal facts worth surfacing to the user. */
   notes: string[];
-  /** Proto files loaded, when source === "proto". */
+  /** Proto files loaded, or descriptor file names when source is reflection. */
   files?: string[];
-}
-
-function stripDot(name: string): string {
-  return name.startsWith(".") ? name.slice(1) : name;
 }
 
 function qualify(pkg: string, name: string): string {
@@ -88,9 +84,10 @@ function registerMessage(
   // map_entry=true. It is an implementation detail of the encoding, never a
   // type the user can name, so it must not appear in the symbol table.
   if (!isMapEntry(message)) {
-    if (symbols.has(fq)) {
+    const existing = symbols.get(fq);
+    if (existing) {
       notes.push(
-        `duplicate definition of "${fq}" (${symbols.get(fq)!.file} and ${file}); ` +
+        `duplicate definition of "${fq}" (${existing.file} and ${file}); ` +
           `the first one was kept.`,
       );
     } else {
@@ -159,6 +156,12 @@ function indexFile(
       continue;
     }
     const fq = qualify(pkg, name);
+    if (serviceDescriptors.has(fq)) {
+      notes.push(
+        `duplicate definition of service "${fq}"; the first one was kept.`,
+      );
+      continue;
+    }
     symbols.set(fq, { kind: "service", type: service, file });
     serviceDescriptors.set(fq, service);
   }
@@ -277,18 +280,6 @@ function decodeSet(buffers: Buffer[], notes: string[]): DecodedFile[] {
  * Public entry point
  * ------------------------------------------------------------------ */
 
-/**
- * Builds a catalog from either a local proto tree or server reflection.
- *
- * These are the only two sources of truth: `.proto` is already the
- * authoritative IDL for gRPC, so any editable intermediate document would be a
- * lossy copy of it.
- *
- * Both sources converge on the same pair of views — decoded
- * FileDescriptorProtos for metadata, proto-loader's package definition for
- * codecs — so downstream code never branches on where the descriptors came
- * from.
- */
 export async function buildCatalog(
   endpoint: GrpcEndpoint,
 ): Promise<{ catalog: Catalog; packageDefinition: Record<string, unknown> }> {
@@ -301,13 +292,11 @@ export async function buildCatalog(
   let source: "proto" | "reflection";
   let files: string[] | undefined;
 
-  if (endpoint.reflection) {
-    if (endpoint.protoPaths?.length) {
-      notes.push(
-        "both reflection and protoPaths were provided; reflection wins and " +
-          "protoPaths are ignored.",
-      );
-    }
+  // Narrowed on `reflection`, the discriminant of GrpcDescriptorSource. Each
+  // branch therefore sees only the options that belong to it, which is what
+  // removes the old "reflection wins, protoPaths ignored" note: that state can
+  // no longer be constructed.
+  if (endpoint.reflection === true) {
     requireCapability(loaded, "descriptorSetFromBuffer");
 
     const { credentials, mode, warnings } = buildCredentialsChecked(
@@ -323,6 +312,9 @@ export async function buildCatalog(
       timeoutMs: endpoint.reflectionTimeoutMs ?? 5000,
       channelOptions: endpoint.channelOptions,
       version: endpoint.reflectionVersion,
+      host: endpoint.reflectionHost,
+      maxFiles: endpoint.maxReflectionFiles,
+      maxBytes: endpoint.maxReflectionBytes,
     });
     notes.push(...reflected.notes);
 
@@ -350,26 +342,30 @@ export async function buildCatalog(
         `${reflected.files.length} file(s).`,
     );
   } else {
-    if (!endpoint.protoPaths?.length) {
-      throw new Error(
-        "grpc endpoint requires protoPaths (files or directories) or reflection: true.",
-      );
-    }
-    files = await collectProtoFiles({
+    // scanProtoFiles throws on an empty result, on an empty protoPaths and on
+    // an unreadable root, so none of those checks are repeated here.
+    const scan = await scanProtoFiles({
       paths: endpoint.protoPaths,
       ignoreDirs: endpoint.ignoreDirs,
       followSymlinks: endpoint.followSymlinks,
+      maxFiles: endpoint.maxProtoFiles,
     });
-    if (files.length === 0) {
-      throw new Error(
-        `no .proto files were found under: ${endpoint.protoPaths.join(", ")}`,
-      );
-    }
-    const includeDirs = endpoint.includeDirs?.length
-      ? endpoint.includeDirs
-      : deriveIncludeDirs(files, endpoint.protoPaths);
+    notes.push(...scan.notes);
+    files = scan.files;
 
-    packageDefinition = (await protoLoader.load(files, {
+    // An explicit includeDirs switches the derivation off entirely: the point of
+    // passing it is to get protoc's resolution rules, and silently adding to it
+    // would defeat that.
+    let includeDirs: string[];
+    if (endpoint.includeDirs?.length) {
+      includeDirs = endpoint.includeDirs;
+    } else {
+      const derived = deriveIncludeDirsDetailed(scan);
+      includeDirs = derived.includeDirs;
+      notes.push(...derived.notes);
+    }
+
+    packageDefinition = (await protoLoader.load(scan.files, {
       ...LOADER_OPTIONS,
       includeDirs,
     })) as unknown as Record<string, unknown>;
@@ -384,9 +380,9 @@ export async function buildCatalog(
     }
     fileDescriptors = decodeSet(harvested.buffers, notes);
     source = "proto";
-    if (files.length > 1) {
+    if (scan.files.length > 1) {
       notes.push(
-        `merged ${files.length} .proto file(s) from ` +
+        `merged ${scan.files.length} .proto file(s) from ` +
           `${endpoint.protoPaths.length} path(s).`,
       );
     }

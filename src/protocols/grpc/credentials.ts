@@ -4,7 +4,11 @@ import type { GrpcCredentialsOptions } from "./types.js";
 /** Reported alongside a result so a relaxed check is never silent. */
 export interface CredentialsBuildResult {
   credentials: import("@grpc/grpc-js").ChannelCredentials;
-  /** "insecure" | "tls-system-roots" | "tls-custom-roots" | "mtls" */
+  /**
+   * What was actually built, derived from the inputs rather than from intent:
+   * "tls-system-roots" is also what you get from `tls: { skipHostnameVerification: true }`
+   * with no rootCerts, which is a very different configuration than it looks.
+   */
   mode: "insecure" | "tls-system-roots" | "tls-custom-roots" | "mtls";
   warnings: string[];
 }

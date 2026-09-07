@@ -3,6 +3,7 @@ import { buildCredentialsChecked } from "./credentials.js";
 import { resolveMethod } from "./descriptor.js";
 import type {
   GrpcEvent,
+  GrpcMetadataOutput,
   GrpcResult,
   GrpcSendOptions,
   GrpcStatus,
@@ -40,15 +41,25 @@ function toStatus(code: number, details?: string): GrpcStatus {
 }
 
 /**
+ * Omit that distributes over a union.
+ *
+ * The built-in Omit collapses a discriminated union into the intersection of
+ * its keys, which would erase payload/metadata/status and make every emit()
+ * call site fail. Distributing keeps each branch intact, so a caller still has
+ * to supply the full set of fields for the branch it picked.
+ */
+type EventDraft<T> = T extends unknown ? Omit<T, "seq" | "at"> : never;
+
+/**
  * grpc-js `Metadata.toJSON()` returns every key as an array, which is the only
  * honest shape: HTTP/2 headers can repeat. Binary (`-bin`) values arrive as
  * Buffers and are base64-encoded so the result stays JSON-serialisable.
  */
-function metadataToObject(md: unknown): Record<string, string[]> {
+function metadataToObject(md: unknown): GrpcMetadataOutput {
   const anyMd = md as { toJSON?: () => Record<string, unknown> } | undefined;
   if (typeof anyMd?.toJSON !== "function") return {};
 
-  const out: Record<string, string[]> = {};
+  const out: GrpcMetadataOutput = {};
   for (const [key, raw] of Object.entries(anyMd.toJSON())) {
     const items = Array.isArray(raw) ? raw : [raw];
     out[key] = items.map((v) =>
@@ -78,9 +89,13 @@ const CLIENT_INITIATED: ReadonlySet<GrpcTruncatedReason> = new Set([
  * log and a single set of termination conditions.
  *
  * Transport-level failures are reported in the result rather than thrown; only
- * descriptor resolution (which happens before any bytes move) throws. See the
- * note on `resolveMethod` — the two are deliberately different because one is a
- * caller mistake and the other is an observation about the world.
+ * descriptor resolution (which happens before any bytes move) throws. The two
+ * are deliberately different: one is a caller mistake, the other is an
+ * observation about the world.
+ *
+ * This resolves the descriptor on every call, which means reading the proto
+ * tree or dialling reflection each time. Calling it in a loop is therefore
+ * wasteful — go through GrpcAdapter, whose catalog cache exists for that case.
  */
 export async function grpcCall(
   target: GrpcTarget,
@@ -100,8 +115,8 @@ export async function grpcCall(
   let error: string | undefined;
   let status: GrpcStatus | undefined;
   let statusOrigin: GrpcStatusOrigin | undefined;
-  let initialMetadata: Record<string, string[]> | undefined;
-  let trailers: Record<string, string[]> | undefined;
+  let initialMetadata: GrpcMetadataOutput | undefined;
+  let trailers: GrpcMetadataOutput | undefined;
   const outbound = options.messages ?? [];
 
   /* ---------------------------------------------------------------- *
@@ -161,6 +176,8 @@ export async function grpcCall(
 
   const callOptions: Record<string, unknown> = {};
   if (target.deadlineMs !== undefined) {
+    // A deadline is not truncation: DEADLINE_EXCEEDED is the peer's verdict, so
+    // it surfaces as a server-origin status and never as truncatedReason.
     callOptions.deadline = new Date(Date.now() + target.deadlineMs);
   }
 
@@ -181,9 +198,9 @@ export async function grpcCall(
      * appending those would mean the event log continues past the moment the
      * result claims the session ended.
      */
-    const emit = (event: Omit<GrpcEvent, "seq" | "at">): void => {
+    const emit = (event: EventDraft<GrpcEvent>): void => {
       if (settled) return;
-      const full: GrpcEvent = { ...event, seq: seq++, at: Date.now() };
+      const full = { ...event, seq: seq++, at: Date.now() } as GrpcEvent;
       events.push(full);
       if (!options.onEvent) return;
       try {
@@ -218,6 +235,9 @@ export async function grpcCall(
         // server will never send one. Without this, max_messages was the only
         // termination path that produced an undefined status while the other
         // three surfaced a real CANCELLED — one meaning, two shapes.
+        //
+        // No event is emitted for it: nothing was observed on the wire, and a
+        // synthetic entry in the timeline would be indistinguishable from one.
         if (CLIENT_INITIATED.has(reason) && !outcomeLocked) {
           setOutcome(
             toStatus(
@@ -272,13 +292,20 @@ export async function grpcCall(
       }
     };
 
+    /**
+     * A failure delivered by grpc-js rather than by the peer's trailers.
+     *
+     * Origin is "client" when there is no code at all — a channel that never
+     * connected — and "server" otherwise, since grpc-js populates the code from
+     * the received status when there was one.
+     */
     const onCallError = (err: unknown): void => {
       const e = err as { code?: number; message?: string; details?: string };
-      setOutcome(
-        toStatus(e.code ?? CODE_UNKNOWN, e.details ?? e.message),
-        "server",
-        e.message ?? String(err),
-      );
+      const observed = toStatus(e.code ?? CODE_UNKNOWN, e.details ?? e.message);
+      const origin: Exclude<GrpcStatusOrigin, "synthesized"> =
+        e.code === undefined ? "client" : "server";
+      setOutcome(observed, origin, e.message ?? String(err));
+      emit({ direction: "status", status: observed, statusOrigin: origin });
       finish();
     };
 
@@ -321,14 +348,21 @@ export async function grpcCall(
         method.serialize(payload);
         return true;
       } catch (e) {
+        const observed = toStatus(
+          CODE_INVALID_ARGUMENT,
+          `request message #${index} does not match ` +
+            `${method.inputType ?? "the request type"}`,
+        );
         setOutcome(
-          toStatus(
-            CODE_INVALID_ARGUMENT,
-            `request message #${index} does not match ${method.inputType ?? "the request type"}`,
-          ),
+          observed,
           "client",
           e instanceof Error ? e.message : String(e),
         );
+        emit({
+          direction: "status",
+          status: observed,
+          statusOrigin: "client",
+        });
         finish();
         return false;
       }
@@ -343,10 +377,19 @@ export async function grpcCall(
       c.on("status", (s) => {
         const st = s as { code: number; details?: string; metadata?: unknown };
         trailers = metadataToObject(st.metadata);
-        // For unary and client-streaming the callback is authoritative, so the
-        // status event only fills in what the callback has not already set.
-        setOutcome(toStatus(st.code, st.details), "server");
-        emit({ direction: "meta", status: toStatus(st.code, st.details) });
+        // One object for both uses: two toStatus() calls would drift the moment
+        // GrpcStatus grows a field.
+        const observed = toStatus(st.code, st.details);
+        // For unary and client-streaming the callback is authoritative, so this
+        // only fills in what the callback has not already set. The event is
+        // recorded either way — it is what the wire showed.
+        setOutcome(observed, "server");
+        emit({
+          direction: "status",
+          status: observed,
+          statusOrigin: "server",
+          metadata: trailers,
+        });
         if (method.responseStream) finish();
       });
     };
@@ -375,11 +418,20 @@ export async function grpcCall(
           c.write?.(payload);
           emit({ direction: "outbound", payload });
         } catch (e) {
+          const observed = toStatus(
+            CODE_UNKNOWN,
+            `write of message #${at} failed`,
+          );
           setOutcome(
-            toStatus(CODE_UNKNOWN, `write of message #${at} failed`),
+            observed,
             "client",
             e instanceof Error ? e.message : String(e),
           );
+          emit({
+            direction: "status",
+            status: observed,
+            statusOrigin: "client",
+          });
           finish();
           return;
         }
@@ -396,8 +448,8 @@ export async function grpcCall(
       if (method.kind === "unary" || method.kind === "server_streaming") {
         const payload = outbound[0] ?? {};
         if (!precheck(payload, 0)) return;
-        // Emitted before dialling so the outbound event cannot be ordered
-        // after a synchronously delivered response or failure.
+        // Emitted before dialling so the outbound event cannot be ordered after
+        // a synchronously delivered response or failure.
         emit({ direction: "outbound", payload });
 
         if (method.kind === "unary") {
@@ -475,11 +527,13 @@ export async function grpcCall(
         startWriting(call);
       }
     } catch (e) {
+      const observed = toStatus(CODE_UNKNOWN, "call setup failed");
       setOutcome(
-        toStatus(CODE_UNKNOWN, "call setup failed"),
+        observed,
         "client",
         e instanceof Error ? e.message : String(e),
       );
+      emit({ direction: "status", status: observed, statusOrigin: "client" });
       finish();
       return;
     }
@@ -493,12 +547,10 @@ export async function grpcCall(
     target,
     events,
     messages: inbound,
-    initialMetadata, //Type 'Record<string, string | string[]> | undefined' is not assignable to type 'Record<string, string[]> | undefined'.
-
+    initialMetadata,
     status,
     statusOrigin,
-    trailers, //Type 'Record<string, string | string[]> | undefined' is not assignable to type 'Record<string, string[]> | undefined'.
-
+    trailers,
     truncated,
     truncatedReason,
     error,

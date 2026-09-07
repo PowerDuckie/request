@@ -1,8 +1,19 @@
-import { buildCatalog } from "./catalog.js";
-import { readMethods, type MethodDescriptor } from "./descriptor-types.js";
+import { buildCatalog, type Catalog } from "./catalog.js";
+import {
+  DescriptorShapeError,
+  readMethods,
+  type MethodDescriptor,
+} from "./descriptor-types.js";
 import type { GrpcMethodKind, GrpcTarget } from "./types.js";
 
 export interface ResolvedMethod {
+  /**
+   * The method name as declared in the descriptor, which may differ in case
+   * from what the caller passed. Anything that records the call — exports,
+   * logs, collection items — must use this rather than the input, or it will
+   * record a name the server does not have.
+   */
+  name: string;
   kind: GrpcMethodKind;
   /** "/pkg.Service/Method" */
   path: string;
@@ -10,7 +21,7 @@ export interface ResolvedMethod {
   responseStream: boolean;
   serialize: (value: unknown) => Buffer;
   deserialize: (buffer: Buffer) => unknown;
-  /** Fully-qualified request/response types, when the descriptor exposed them. */
+  /** Fully-qualified request/response message names, when the descriptor had them. */
   inputType?: string;
   outputType?: string;
   /** How the descriptor was obtained. */
@@ -19,24 +30,19 @@ export interface ResolvedMethod {
   notes: string[];
 }
 
-/** Shape of one entry in a proto-loader ServiceDefinition. */
-interface RuntimeMethod {
-  path: string;
-  requestStream: boolean;
-  responseStream: boolean;
-  requestSerialize: (v: unknown) => Buffer;
-  responseDeserialize: (b: Buffer) => unknown;
-}
-
-function isRuntimeMethod(v: unknown): v is RuntimeMethod {
-  const m = v as Partial<RuntimeMethod> | null;
-  return (
-    !!m &&
-    typeof m === "object" &&
-    typeof m.path === "string" &&
-    typeof m.requestSerialize === "function" &&
-    typeof m.responseDeserialize === "function"
-  );
+/**
+ * A catalog already built for this endpoint, supplied to avoid re-reading the
+ * proto tree and, under reflection, to avoid a second dial.
+ *
+ * Both halves are required together because they must come from ONE
+ * buildCatalog call: the package definition is the runtime view and the catalog
+ * is the metadata view of the same descriptors. Mixing views from two builds
+ * would let the streaming cross-check below compare two different moments of
+ * the server and refuse a call for a disagreement that never existed.
+ */
+export interface ResolveMethodOptions {
+  catalog: Catalog;
+  packageDefinition: Record<string, unknown>;
 }
 
 function kindOf(req: boolean, res: boolean): GrpcMethodKind {
@@ -46,6 +52,38 @@ function kindOf(req: boolean, res: boolean): GrpcMethodKind {
   return "unary";
 }
 
+function stripDot(name: string): string {
+  return name.startsWith(".") ? name.slice(1) : name;
+}
+
+/** The subset of proto-loader's MethodDefinition this module relies on. */
+interface RuntimeMethod {
+  path: string;
+  requestStream: boolean;
+  responseStream: boolean;
+  requestSerialize: (v: unknown) => Buffer;
+  responseDeserialize: (b: Buffer) => unknown;
+}
+
+/**
+ * Verifies every field the interface claims, including the two booleans.
+ *
+ * Those two decide the streaming kind, and an entry that omits them is not a
+ * method definition this module understands — treating a missing flag as false
+ * is how a bidi method gets dialled as unary.
+ */
+function isRuntimeMethod(value: unknown): value is RuntimeMethod {
+  if (!value || typeof value !== "object") return false;
+  const m = value as Partial<RuntimeMethod>;
+  return (
+    typeof m.path === "string" &&
+    typeof m.requestStream === "boolean" &&
+    typeof m.responseStream === "boolean" &&
+    typeof m.requestSerialize === "function" &&
+    typeof m.responseDeserialize === "function"
+  );
+}
+
 /** Trailing method name of "/pkg.Service/Method". */
 function methodNameFromPath(path: string): string {
   const i = path.lastIndexOf("/");
@@ -53,200 +91,214 @@ function methodNameFromPath(path: string): string {
 }
 
 /**
- * Dependency sentinel.
+ * Collapses proto-loader's method entries onto their wire names.
  *
- * The runtime service definition (proto-loader) and the descriptor protos are
- * two independent views of the same service. They must agree. When they do
- * not, one of the two loading paths has silently degraded — historically the
- * descriptor path returning zero methods while the runtime path worked fine,
- * which produced the self-contradicting "method X not found. Available: X".
- *
- * Disagreement is reported as a note rather than an error: the runtime view is
- * sufficient to place the call, and refusing to dial because the *metadata*
- * view is stale would be a worse trade. `describeMethod` cannot fall back this
- * way and raises instead — see `describeFromCatalog`.
+ * proto-loader has historically keyed one method under both its declared name
+ * and its lowerCamelCase form. Matching against raw keys therefore reports
+ * `Say` as "ambiguous with say" for a service that declares a single method —
+ * and reports it only on the call path, while discovery (which keys by path)
+ * lists one method. The wire path is the authority in both places.
  */
-export function crossCheckMethodViews(
+function collapseRuntimeMethods(
+  serviceDef: Record<string, unknown>,
+): Map<string, RuntimeMethod> {
+  const out = new Map<string, RuntimeMethod>();
+  const chosenKey = new Map<string, string>();
+
+  for (const [key, raw] of Object.entries(serviceDef)) {
+    if (!isRuntimeMethod(raw)) continue;
+    const wireName = methodNameFromPath(raw.path);
+    // Keep the entry whose key matches the wire name, so diagnostics quote the
+    // declared spelling rather than the camelCase alias.
+    if (!out.has(wireName) || chosenKey.get(wireName) !== wireName) {
+      out.set(wireName, raw);
+      chosenKey.set(wireName, key);
+    }
+  }
+  return out;
+}
+
+/**
+ * Finds a name matching `wanted`, exactly if possible and otherwise
+ * case-insensitively.
+ *
+ * The fallback exists because users type method names by hand, but it is
+ * reported: silently invoking `Say` when the user wrote `say` is fine, silently
+ * doing so when the service also declares `say` would not be.
+ */
+function matchName(
+  names: string[],
+  wanted: string,
+): { name: string; exact: boolean } | undefined {
+  if (names.includes(wanted)) return { name: wanted, exact: true };
+  const lowered = wanted.toLowerCase();
+  const candidates = names.filter((n) => n.toLowerCase() === lowered);
+  if (candidates.length === 1) return { name: candidates[0], exact: false };
+  return undefined;
+}
+
+/**
+ * Reads the descriptor view of one service, degrading loudly.
+ *
+ * A descriptor that cannot be read costs the message type names and nothing
+ * else — the codecs needed to place the call come from the runtime view. So
+ * this returns undefined with a note instead of throwing; letting
+ * DescriptorShapeError escape would abort a call that was fully equipped to
+ * succeed.
+ */
+function readDescribedMethods(
+  catalog: Catalog,
   service: string,
-  runtimeNames: string[],
-  descriptorMethods: MethodDescriptor[] | undefined,
-): string[] {
-  const notes: string[] = [];
-  if (descriptorMethods === undefined) return notes;
-
-  const runtime = new Set(runtimeNames);
-  const described = new Set(descriptorMethods.map((m) => m.name));
-
-  if (described.size === 0 && runtime.size > 0) {
+  notes: string[],
+): MethodDescriptor[] | undefined {
+  const descriptor = catalog.serviceDescriptors.get(service);
+  if (descriptor === undefined) {
     notes.push(
-      `descriptor view of ${service} lists no methods while the runtime view ` +
-        `lists ${runtime.size} (${[...runtime].sort().join(", ")}). ` +
-        `Request templates and type information are unavailable for this service.`,
+      `no descriptor for ${service} in the ${catalog.source} catalog; ` +
+        `the call can still be made but request templates and message type ` +
+        `names are unavailable.`,
     );
-    return notes;
+    return undefined;
   }
-
-  const missingFromDescriptor = [...runtime].filter((n) => !described.has(n));
-  const missingFromRuntime = [...described].filter((n) => !runtime.has(n));
-
-  if (missingFromDescriptor.length) {
+  try {
+    return readMethods(descriptor);
+  } catch (e) {
+    if (!(e instanceof DescriptorShapeError)) throw e;
     notes.push(
-      `methods present at runtime but absent from the descriptor of ` +
-        `${service}: ${missingFromDescriptor.sort().join(", ")}.`,
+      `the descriptor for ${service} is unreadable, so message type names are ` +
+        `unavailable and no request template can be generated; the call ` +
+        `itself is unaffected: ${e.message}`,
     );
+    return undefined;
   }
-  if (missingFromRuntime.length) {
-    notes.push(
-      `methods present in the descriptor but not invocable on ${service}: ` +
-        `${missingFromRuntime.sort().join(", ")}.`,
-    );
-  }
-
-  return notes;
 }
 
 /**
  * Resolves one method to the codecs and streaming flags needed to invoke it.
  *
- * The streaming kind has exactly one source — the descriptor — and is never
- * accepted from the caller, so a mismatch between declaration and runtime
- * behaviour is not representable. Where the two available descriptor views
- * disagree, the runtime view wins for dialling and the disagreement is
- * reported.
+ * Two views are consulted and both must agree. The runtime view (proto-loader's
+ * package definition) is the only source of codecs and paths; the descriptor
+ * view is the only source of message type names. Where they overlap — the
+ * streaming flags — a disagreement means one of them is describing a different
+ * method, and the call is refused rather than guessed: choosing wrongly leaves
+ * a stream that should be half-closed open, or closes one that should stay open,
+ * and both present as a hang instead of an error.
+ *
+ * Called without `options` it builds a catalog itself, which means re-reading
+ * the proto tree or re-dialling for reflection on every call. That cost is
+ * accepted so that `grpcCall` stays usable on its own; anything issuing more
+ * than one call should build the catalog once (or go through GrpcAdapter, which
+ * caches it) and pass it here.
  */
 export async function resolveMethod(
   target: GrpcTarget,
+  options?: ResolveMethodOptions,
 ): Promise<ResolvedMethod> {
-  const { catalog, packageDefinition } = await buildCatalog(target);
+  const { catalog, packageDefinition } =
+    options ?? (await buildCatalog(target));
+
   const notes = [...catalog.notes];
+
+  /* ---- runtime view: codecs and path ---------------------------- */
 
   const serviceDef = packageDefinition[target.service];
   if (!serviceDef || typeof serviceDef !== "object") {
+    const known = new Set([...catalog.invocableServices, ...catalog.services]);
+    const hint = catalog.services.includes(target.service)
+      ? ` It exists in the descriptor but no codecs were generated for it, ` +
+        `so it cannot be called.`
+      : ` Available: ${[...known].sort().join(", ") || "(none)"}`;
     throw new Error(
-      `service "${target.service}" not found (source: ${catalog.source}). ` +
-        `Available: ${catalog.services.join(", ") || "(none)"}`,
+      `service "${target.service}" is not invocable (source: ${catalog.source}).${hint}`,
     );
   }
 
-  const def = serviceDef as Record<string, unknown>;
-  const runtimeEntries = new Map<string, RuntimeMethod>();
-  for (const [key, value] of Object.entries(def)) {
-    if (isRuntimeMethod(value)) runtimeEntries.set(key, value);
-  }
+  const runtimeMethods = collapseRuntimeMethods(
+    serviceDef as Record<string, unknown>,
+  );
+  const runtimeNames = [...runtimeMethods.keys()];
 
-  if (runtimeEntries.size === 0) {
+  const matched = matchName(runtimeNames, target.method);
+  if (!matched) {
+    const ambiguous =
+      runtimeNames.filter(
+        (n) => n.toLowerCase() === target.method.toLowerCase(),
+      ).length > 1;
     throw new Error(
-      `service "${target.service}" was found (source: ${catalog.source}) but ` +
-        `exposes no invocable methods. The descriptor source is incomplete; ` +
-        `keys present: [${Object.keys(def).sort().join(", ") || "(none)"}].`,
+      ambiguous
+        ? `method "${target.method}" is ambiguous on ${target.service}; ` +
+            `several methods differ only in case. Use the exact name.`
+        : `method "${target.method}" not found on ${target.service}. ` +
+            `Available: ${[...runtimeNames].sort().join(", ") || "(none)"}`,
     );
   }
-
-  // Descriptor view, when the catalog carried one. Never fatal here.
-   let describedMethods: MethodDescriptor[] | undefined;
-  const serviceDescriptor = catalog.serviceDescriptors.get(target.service);
-  if (serviceDescriptor === undefined) {
+  if (!matched.exact) {
     notes.push(
-      `no descriptor for ${target.service} in the ${catalog.source} catalog; ` +
-        `calling is still possible but type information is unavailable.`,
+      `method matched case-insensitively: requested "${target.method}", ` +
+        `using "${matched.name}".`,
     );
-  } else {
-    try {
-      describedMethods = readMethods(serviceDescriptor);
-    } catch (e) {
+  }
+
+  // Guaranteed present: matched.name came from this map's keys.
+  const runtime = runtimeMethods.get(matched.name)!;
+  const requestStream = runtime.requestStream;
+  const responseStream = runtime.responseStream;
+
+  /* ---- descriptor view: type names, and a cross-check ----------- */
+
+  const describedMethods = readDescribedMethods(catalog, target.service, notes);
+  let described: MethodDescriptor | undefined;
+
+  if (describedMethods) {
+    described = describedMethods.find((m) => m.name === matched.name);
+    if (!described) {
       notes.push(
-        `descriptor for ${target.service} is unreadable: ` +
-          `${e instanceof Error ? e.message : String(e)}`,
+        `method "${matched.name}" is invocable but absent from the ` +
+          `${target.service} descriptor; message type names are unavailable.`,
       );
     }
   }
 
-  notes.push(
-    ...crossCheckMethodViews(
-      target.service,
-      [...runtimeEntries.keys()],
-      describedMethods,
-    ),
-  );
-
-  const requested = target.method;
-  let methodKey = runtimeEntries.has(requested) ? requested : undefined;
-
-  if (!methodKey) {
-    // proto-loader has historically keyed definitions by both the declared
-    // name and its lowerCamelCase form; match on the wire path as the
-    // authority before falling back to a case-insensitive scan.
-    for (const [key, entry] of runtimeEntries) {
-      if (methodNameFromPath(entry.path) === requested) {
-        methodKey = key;
-        break;
-      }
-    }
-    if (methodKey && methodKey !== requested) {
-      notes.push(
-        `method "${requested}" matched via its wire path; ` +
-          `definition key is "${methodKey}".`,
-      );
-    }
-  }
-
-  if (!methodKey) {
-    const ciMatches = [...runtimeEntries.keys()].filter(
-      (k) => k.toLowerCase() === requested.toLowerCase(),
-    );
-    if (ciMatches.length === 1) {
-      methodKey = ciMatches[0];
-      notes.push(
-        `method matched case-insensitively: requested "${requested}", ` +
-          `using "${methodKey}".`,
-      );
-    } else if (ciMatches.length > 1) {
-      throw new Error(
-        `method "${requested}" is ambiguous on ${target.service}: ` +
-          `${ciMatches.sort().join(", ")}. Use the exact declared name.`,
-      );
-    }
-  }
-
-  if (!methodKey) {
+  if (
+    described &&
+    (described.clientStreaming !== requestStream ||
+      described.serverStreaming !== responseStream)
+  ) {
     throw new Error(
-      `method "${requested}" not found on ${target.service} ` +
-        `(source: ${catalog.source}). ` +
-        `Available: ${[...runtimeEntries.keys()].sort().join(", ")}`,
+      `descriptor and runtime disagree on the streaming kind of ` +
+        `${target.service}/${matched.name}: descriptor says ` +
+        `${kindOf(described.clientStreaming, described.serverStreaming)}, ` +
+        `runtime says ${kindOf(requestStream, responseStream)}. ` +
+        `Refusing to dial, because either choice would misuse the stream. ` +
+        `The descriptor source is likely stale or mixed — reload the proto ` +
+        `tree, or clear cached reflection data.`,
     );
   }
 
-  const m = runtimeEntries.get(methodKey)!;
-  const described = describedMethods?.find(
-    (d) => d.name === methodKey || d.name === requested,
-  );
+  /* ---- path sanity --------------------------------------------- */
 
-  if (described) {
-    if (
-      described.clientStreaming !== m.requestStream ||
-      described.serverStreaming !== m.responseStream
-    ) {
-      // Not recoverable by choosing a side: picking the wrong one means
-      // half-closing a stream that must stay open, or never half-closing one
-      // that must. Refuse rather than guess.
-      throw new Error(
-        `streaming flags disagree for ${target.service}/${methodKey}: ` +
-          `descriptor says ${kindOf(described.clientStreaming, described.serverStreaming)}, ` +
-          `runtime says ${kindOf(m.requestStream, m.responseStream)}. ` +
-          `The descriptor source and the loaded definition are out of sync.`,
-      );
-    }
+  const expectedPath = `/${target.service}/${matched.name}`;
+  if (runtime.path !== expectedPath) {
+    // Not fatal: the runtime path is authoritative and is what gets dialled.
+    // But a mismatch means the service name we were given is not the one the
+    // codecs belong to, which would otherwise only show up as a server-side
+    // UNIMPLEMENTED.
+    notes.push(
+      `the method path reported by the loader (${runtime.path}) differs from ` +
+        `the expected ${expectedPath}; the loader's path is used.`,
+    );
   }
 
   return {
-    kind: kindOf(m.requestStream === true, m.responseStream === true),
-    path: m.path,
-    requestStream: m.requestStream === true,
-    responseStream: m.responseStream === true,
-    serialize: m.requestSerialize,
-    deserialize: m.responseDeserialize,
-    inputType: described?.inputType,
-    outputType: described?.outputType,
+    name: matched.name,
+    kind: kindOf(requestStream, responseStream),
+    path: runtime.path,
+    requestStream,
+    responseStream,
+    serialize: runtime.requestSerialize,
+    deserialize: runtime.responseDeserialize,
+    inputType: described ? stripDot(described.inputType) : undefined,
+    outputType: described ? stripDot(described.outputType) : undefined,
     source: catalog.source,
     notes,
   };
