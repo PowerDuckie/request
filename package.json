@@ -22,11 +22,6 @@
       "import": "./dist/protocols/ws/index.js",
       "require": "./dist/protocols/ws/index.cjs"
     },
-    "./openapi": {
-      "types": "./dist/openapi/index.d.ts",
-      "import": "./dist/openapi/index.js",
-      "require": "./dist/openapi/index.cjs"
-    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -73,10 +68,5 @@
     "typescript": "^5.7.2",
     "terser": "^5.51.2",
     "vitest": "^2.1.8"
-  },
-  "peerDependenciesMeta": {
-    "ws": {
-      "optional": true
-    }
   }
 }
