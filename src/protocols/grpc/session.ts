@@ -53,8 +53,8 @@ export interface GrpcManualSession {
   readonly state: GrpcManualSessionState;
   readonly kind: GrpcMethodKind;
   readonly source: GrpcDescriptorSourceKind;
-  readonly events: GrpcManualSessionEvent[];
-  readonly warnings: unknown[];
+  readonly events: readonly GrpcManualSessionEvent[];
+  readonly warnings: readonly unknown[];
   open(): Promise<void>;
   send(message: unknown): Promise<void>;
   close(): Promise<void>;
@@ -368,6 +368,7 @@ export async function createGrpcManualSession(
 ): Promise<GrpcManualSession> {
   const events: GrpcManualSessionEvent[] = [];
   const warnings: unknown[] = [];
+  const maxEvents = 1000;
 
   let state: GrpcManualSessionState = "idle";
   let sentCount = 0;
@@ -386,6 +387,9 @@ export async function createGrpcManualSession(
 
   function record(event: GrpcManualSessionEvent) {
     events.push(event);
+    if (maxEvents > 0 && events.length > maxEvents) {
+      events.splice(0, events.length - maxEvents);
+    }
   }
 
   function markClosed() {

@@ -37,6 +37,12 @@ export interface CreateWsManualSessionOptions {
   headers?: Record<string, string>;
   subprotocols?: string[];
   rejectUnauthorized?: boolean;
+  /** Abort opening / pending operations from the outside. */
+  signal?: AbortSignal;
+  /** Handshake timeout in ms. Default 15_000. */
+  openTimeoutMs?: number;
+  /** Ring-buffer cap for events. 0 = unbounded. Default 1000. */
+  maxEvents?: number;
 }
 
 export interface WsSendOptions {
@@ -46,7 +52,7 @@ export interface WsSendOptions {
 
 export interface WsManualSession {
   readonly state: WebSocketSessionState;
-  readonly events: WebSocketSessionEvent[];
+  readonly events: readonly WebSocketSessionEvent[];
 
   open(): Promise<void>;
 
@@ -102,6 +108,14 @@ export function createWsManualSession(
 ): WsManualSession {
   let state: WebSocketSessionState = "idle";
   const events: WebSocketSessionEvent[] = [];
+  const maxEvents =
+    typeof options.maxEvents === "number" && options.maxEvents >= 0
+      ? Math.floor(options.maxEvents)
+      : 1000;
+  const openTimeoutMs =
+    typeof options.openTimeoutMs === "number" && options.openTimeoutMs > 0
+      ? Math.floor(options.openTimeoutMs)
+      : 15_000;
 
   let socket: WebSocket | null = null;
 
@@ -120,6 +134,9 @@ export function createWsManualSession(
 
   function record(event: WebSocketSessionEvent): void {
     events.push(event);
+    if (maxEvents > 0 && events.length > maxEvents) {
+      events.splice(0, events.length - maxEvents);
+    }
   }
 
   function assertSocketOpen(): WebSocket {
@@ -147,13 +164,18 @@ export function createWsManualSession(
       return state;
     },
 
-    get events(): WebSocketSessionEvent[] {
+    get events(): readonly WebSocketSessionEvent[] {
       return events;
     },
 
     async open(): Promise<void> {
       if (state !== "idle" && state !== "closed" && state !== "error") {
         throw new Error(`WebSocket session cannot open from state "${state}"`);
+      }
+
+      if (options.signal?.aborted) {
+        state = "closed";
+        throw new Error("WebSocket open aborted");
       }
 
       if (!options.url?.trim()) {
@@ -183,6 +205,17 @@ export function createWsManualSession(
 
         let openSettled = false;
         let unexpectedResponseReceived = false;
+        let openTimeout: ReturnType<typeof setTimeout> | undefined;
+        let detachAbort: (() => void) | undefined;
+
+        const cleanupOpenGuards = (): void => {
+          if (openTimeout) {
+            clearTimeout(openTimeout);
+            openTimeout = undefined;
+          }
+          detachAbort?.();
+          detachAbort = undefined;
+        };
 
         const rejectOpen = (error: Error): void => {
           if (openSettled) {
@@ -190,6 +223,7 @@ export function createWsManualSession(
           }
 
           openSettled = true;
+          cleanupOpenGuards();
           reject(error);
         };
 
@@ -199,8 +233,51 @@ export function createWsManualSession(
           }
 
           openSettled = true;
+          cleanupOpenGuards();
           resolve();
         };
+
+        openTimeout = setTimeout(() => {
+          const error = new Error(
+            `WebSocket handshake timed out after ${openTimeoutMs}ms`,
+          );
+          state = "error";
+          recordError(error);
+          rejectOpen(error);
+          try {
+            ws.terminate();
+          } catch {
+            // ignore
+          }
+        }, openTimeoutMs);
+
+        if (typeof (openTimeout as any)?.unref === "function") {
+          (openTimeout as any).unref();
+        }
+
+        if (options.signal) {
+          const onAbort = () => {
+            const error = new Error("WebSocket open aborted");
+            state = "closed";
+            recordError(error);
+            rejectOpen(error);
+            try {
+              ws.terminate();
+            } catch {
+              // ignore
+            }
+            closeResolve();
+          };
+
+          if (options.signal.aborted) {
+            onAbort();
+            return;
+          }
+
+          options.signal.addEventListener("abort", onAbort, { once: true });
+          detachAbort = () =>
+            options.signal?.removeEventListener("abort", onAbort);
+        }
 
         ws.once("upgrade", (response) => {
           record({
@@ -340,10 +417,18 @@ export function createWsManualSession(
     },
 
     async send(data: unknown, sendOptions: WsSendOptions = {}): Promise<void> {
+      if (options.signal?.aborted) {
+        throw new Error("WebSocket send aborted");
+      }
+
       const ws = assertSocketOpen();
 
       if (sendOptions.delayMs !== undefined && sendOptions.delayMs > 0) {
         await delay(sendOptions.delayMs);
+      }
+
+      if (options.signal?.aborted) {
+        throw new Error("WebSocket send aborted");
       }
 
       assertSocketOpen();

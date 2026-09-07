@@ -375,6 +375,7 @@ interface McpOptions {
     env?: Record<string, string | undefined>;
     timeoutMs?: number;
     maxBufferBytes?: number;
+    maxStderrBytes?: number;
     method?: string;
     name?: string;
     arguments?: Record<string, unknown>;

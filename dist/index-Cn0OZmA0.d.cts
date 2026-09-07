@@ -1,64 +1,22 @@
-import { L as LocatedOperation, a as SendOptions, b as ExecuteContext, E as ExecResult, P as ProtocolAdapter, A as AdapterContext } from './protocol-DchfIPz3.cjs';
+import { L as LocatedOperation, a as SendOptions, b as ExecuteContext, E as ExecResult, P as ProtocolAdapter, A as AdapterContext } from './protocol-BBjdeNfE.cjs';
 
 type McpTransport = "streamable-http" | "stdio";
 interface ResolvedMcpConfig {
-    /**
-     * MCP transport.
-     *
-     * - streamable-http: MCP Streamable HTTP transport
-     * - stdio: spawned child-process stdin/stdout transport
-     */
     transport: McpTransport;
-    /**
-     * Required for streamable-http.
-     */
     endpoint?: string;
-    /**
-     * Required for stdio.
-     *
-     * Examples:
-     *   node
-     *   npx
-     *   python
-     *   uvx
-     */
     command?: string;
-    /**
-     * Child-process arguments for stdio transport.
-     */
     args?: string[];
-    /**
-     * Optional child-process working directory.
-     */
     cwd?: string;
-    /**
-     * Optional child-process environment overrides.
-     */
     env?: Record<string, string | undefined>;
-    /**
-     * stdio request timeout.
-     */
     timeoutMs?: number;
-    /**
-     * Maximum buffered stdout bytes before failing.
-     */
     maxBufferBytes?: number;
+    maxStderrBytes?: number;
     method: string;
-    /**
-     * Fully-formed JSON-RPC params for `method`.
-     */
+    /** Fully-formed JSON-RPC `params` for `method`. */
     params: Record<string, unknown>;
-    /**
-     * HTTP headers.
-     *
-     * Ignored by stdio transport except where the transport implementation
-     * explicitly uses them for diagnostics or compatibility.
-     */
     headers: Record<string, string>;
     sessionId?: string;
-    /**
-     * Only set when explicitly configured or negotiated.
-     */
+    /** Only set when the caller actually negotiated it; never guessed. */
     protocolVersion?: string;
     clientInfo: {
         name: string;
@@ -68,18 +26,9 @@ interface ResolvedMcpConfig {
 /**
  * Resolve the effective MCP call.
  *
- * Precedence:
- *
- *   options.mcp.*
- *     >
- *   operation["x-mcp"].*
- *     >
- *   transport defaults
- *
- * Transport-specific validation:
- *
- *   streamable-http -> endpoint is required and must be absolute http(s)
- *   stdio           -> command is required
+ * Precedence: `options.mcp.*` (per-call override) > `operation['x-mcp'].*`
+ * (the document's declared capability, normally produced by
+ * {@link writeMcpOperations}).
  */
 declare function resolveMcpConfig(located: LocatedOperation, spec: any, options: SendOptions): ResolvedMcpConfig;
 

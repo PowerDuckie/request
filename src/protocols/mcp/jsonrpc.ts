@@ -55,8 +55,33 @@ export async function sendJsonRpc(
     signal?: AbortSignal;
     startedAt: number;
     protocolVersion?: string;
+    timeoutMs?: number;
+    maxResponseBytes?: number;
   },
 ): Promise<JsonRpcOutcome> {
+  const controller = new AbortController();
+  let detachAbort: (() => void) | undefined;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
+  if (init.signal) {
+    const onAbort = () => controller.abort(init.signal?.reason);
+    if (init.signal.aborted) {
+      onAbort();
+    } else {
+      init.signal.addEventListener("abort", onAbort, { once: true });
+      detachAbort = () => init.signal?.removeEventListener("abort", onAbort);
+    }
+  }
+
+  if (typeof init.timeoutMs === "number" && init.timeoutMs > 0) {
+    timeout = setTimeout(() => {
+      controller.abort(new Error(`MCP request timed out after ${init.timeoutMs}ms`));
+    }, init.timeoutMs);
+    if (typeof (timeout as any)?.unref === "function") {
+      (timeout as any).unref();
+    }
+  }
+
   let response: Response;
   try {
     response = await fetch(endpoint, {
@@ -68,12 +93,15 @@ export async function sendJsonRpc(
         ...(init.headers ?? {}),
       },
       body: JSON.stringify(message),
-      signal: init.signal,
+      signal: controller.signal,
     });
   } catch (e) {
     throw err("MCP_TRANSPORT_FAILED", `Could not reach MCP endpoint: ${(e as Error)?.message ?? e}`, undefined, {
       cause: e,
     });
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    detachAbort?.();
   }
 
   const firstByteMs = Date.now() - init.startedAt;
@@ -100,11 +128,26 @@ export async function sendJsonRpc(
     const parser = new SseParser();
     const reader = response.body.getReader();
     let bytes = 0;
+    const maxResponseBytes =
+      typeof init.maxResponseBytes === "number" && init.maxResponseBytes > 0
+        ? init.maxResponseBytes
+        : 0;
     let matched: any;
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
       bytes += value?.byteLength ?? 0;
+      if (maxResponseBytes > 0 && bytes > maxResponseBytes) {
+        try {
+          await reader.cancel();
+        } catch {
+          /* ignore */
+        }
+        throw err(
+          "MCP_RESPONSE_TOO_LARGE",
+          `MCP response exceeded ${maxResponseBytes} bytes while reading event stream.`,
+        );
+      }
       for (const event of parser.push(value)) {
         if (event.parsed && typeof event.parsed === "object") {
           const candidate = event.parsed as any;
@@ -145,6 +188,16 @@ export async function sendJsonRpc(
   let parsed: any;
   try {
     rawText = await response.text();
+    if (
+      typeof init.maxResponseBytes === "number" &&
+      init.maxResponseBytes > 0 &&
+      rawText.length > init.maxResponseBytes
+    ) {
+      throw err(
+        "MCP_RESPONSE_TOO_LARGE",
+        `MCP response exceeded ${init.maxResponseBytes} bytes.`,
+      );
+    }
     if (rawText.trim()) parsed = JSON.parse(rawText);
   } catch (e) {
     return {

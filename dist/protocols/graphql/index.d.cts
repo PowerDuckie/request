@@ -1,4 +1,4 @@
-import { L as LocatedOperation, a as SendOptions, b as ExecuteContext, E as ExecResult, P as ProtocolAdapter, A as AdapterContext } from '../../protocol-DchfIPz3.cjs';
+import { L as LocatedOperation, a as SendOptions, b as ExecuteContext, E as ExecResult, P as ProtocolAdapter, A as AdapterContext } from '../../protocol-BBjdeNfE.cjs';
 
 interface ResolvedGraphQLConfig {
     endpoint: string;

@@ -1,4 +1,4 @@
-import { L as LocatedOperation, a as SendOptions, b as ExecuteContext, E as ExecResult, P as ProtocolAdapter, A as AdapterContext } from '../../protocol-DchfIPz3.cjs';
+import { L as LocatedOperation, a as SendOptions, b as ExecuteContext, E as ExecResult, P as ProtocolAdapter, A as AdapterContext } from '../../protocol-BBjdeNfE.cjs';
 
 interface ResolvedWsConfig {
     url: string;
@@ -60,6 +60,12 @@ interface CreateWsManualSessionOptions {
     headers?: Record<string, string>;
     subprotocols?: string[];
     rejectUnauthorized?: boolean;
+    /** Abort opening / pending operations from the outside. */
+    signal?: AbortSignal;
+    /** Handshake timeout in ms. Default 15_000. */
+    openTimeoutMs?: number;
+    /** Ring-buffer cap for events. 0 = unbounded. Default 1000. */
+    maxEvents?: number;
 }
 interface WsSendOptions {
     delayMs?: number;
@@ -67,7 +73,7 @@ interface WsSendOptions {
 }
 interface WsManualSession {
     readonly state: WebSocketSessionState;
-    readonly events: WebSocketSessionEvent[];
+    readonly events: readonly WebSocketSessionEvent[];
     open(): Promise<void>;
     send(data: unknown, options?: WsSendOptions): Promise<void>;
     close(options?: {
