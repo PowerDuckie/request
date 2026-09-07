@@ -366,21 +366,19 @@ interface GraphQLOptions {
 }
 /** MCP-specific execution options (Streamable HTTP transport). */
 interface McpOptions {
-    /** Absolute http(s) URL of the MCP Streamable HTTP endpoint. */
+    transport?: "streamable-http" | "stdio";
     endpoint?: string;
-    /** One of the JSON-RPC methods accepted by the adapter. */
-    method?: string;
-    /** Tool or prompt name (unused for resources/read). */
-    name?: string;
-    /** Arguments merged over the schema-sampled defaults. */
-    arguments?: Record<string, unknown>;
     headers?: Record<string, string>;
-    /** Reuse an already-negotiated session instead of handshaking. */
+    command?: string;
+    args?: string[];
+    cwd?: string;
+    env?: Record<string, string | undefined>;
+    timeoutMs?: number;
+    maxBufferBytes?: number;
+    method?: string;
+    name?: string;
+    arguments?: Record<string, unknown>;
     sessionId?: string;
-    /**
-     * Protocol version to advertise when reusing `sessionId`. Omit it and no
-     * `MCP-Protocol-Version` header is sent, letting the server default.
-     */
     protocolVersion?: string;
     clientInfo?: {
         name: string;

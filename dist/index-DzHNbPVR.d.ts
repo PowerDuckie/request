@@ -1,13 +1,64 @@
-import { L as LocatedOperation, a as SendOptions, b as ExecuteContext, E as ExecResult, P as ProtocolAdapter, A as AdapterContext } from './protocol-C1fL6J7c.js';
+import { L as LocatedOperation, a as SendOptions, b as ExecuteContext, E as ExecResult, P as ProtocolAdapter, A as AdapterContext } from './protocol-DchfIPz3.js';
 
+type McpTransport = "streamable-http" | "stdio";
 interface ResolvedMcpConfig {
-    endpoint: string;
+    /**
+     * MCP transport.
+     *
+     * - streamable-http: MCP Streamable HTTP transport
+     * - stdio: spawned child-process stdin/stdout transport
+     */
+    transport: McpTransport;
+    /**
+     * Required for streamable-http.
+     */
+    endpoint?: string;
+    /**
+     * Required for stdio.
+     *
+     * Examples:
+     *   node
+     *   npx
+     *   python
+     *   uvx
+     */
+    command?: string;
+    /**
+     * Child-process arguments for stdio transport.
+     */
+    args?: string[];
+    /**
+     * Optional child-process working directory.
+     */
+    cwd?: string;
+    /**
+     * Optional child-process environment overrides.
+     */
+    env?: Record<string, string | undefined>;
+    /**
+     * stdio request timeout.
+     */
+    timeoutMs?: number;
+    /**
+     * Maximum buffered stdout bytes before failing.
+     */
+    maxBufferBytes?: number;
     method: string;
-    /** Fully-formed JSON-RPC `params` for `method`. */
+    /**
+     * Fully-formed JSON-RPC params for `method`.
+     */
     params: Record<string, unknown>;
+    /**
+     * HTTP headers.
+     *
+     * Ignored by stdio transport except where the transport implementation
+     * explicitly uses them for diagnostics or compatibility.
+     */
     headers: Record<string, string>;
     sessionId?: string;
-    /** Only set when the caller actually negotiated it; never guessed. */
+    /**
+     * Only set when explicitly configured or negotiated.
+     */
     protocolVersion?: string;
     clientInfo: {
         name: string;
@@ -17,22 +68,21 @@ interface ResolvedMcpConfig {
 /**
  * Resolve the effective MCP call.
  *
- * Precedence: `options.mcp.*` (per-call override) > `operation['x-mcp'].*`
- * (the document's declared capability, normally produced by
- * {@link writeMcpOperations}).
+ * Precedence:
+ *
+ *   options.mcp.*
+ *     >
+ *   operation["x-mcp"].*
+ *     >
+ *   transport defaults
+ *
+ * Transport-specific validation:
+ *
+ *   streamable-http -> endpoint is required and must be absolute http(s)
+ *   stdio           -> command is required
  */
 declare function resolveMcpConfig(located: LocatedOperation, spec: any, options: SendOptions): ResolvedMcpConfig;
 
-/**
- * Run one MCP call.
- *
- * Every call is preceded by its own `initialize` handshake unless the caller
- * supplies a `sessionId` to reuse — MCP sessions are stateful, but this
- * toolkit models one `send()` as one self-contained sample, the same way the
- * gRPC adapter dials fresh per plan and the WebSocket adapter opens and
- * closes one socket per call. The handshake is recorded under `replays` so
- * it stays visible without being mistaken for the operation itself.
- */
 declare function runMcp(config: ResolvedMcpConfig, options: SendOptions, ctx?: ExecuteContext): Promise<ExecResult>;
 
 declare const MCP_PROTOCOL_VERSION = "2025-06-18";
