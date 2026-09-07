@@ -61,8 +61,7 @@ class Reader {
 
   /** Reads a length-delimited field as a copy, so it can outlive `buf`. */
   bytes(): Buffer {
-    const view = this.view();
-    return Buffer.from(view);
+    return Buffer.from(this.view());
   }
 
   /** Reads a length-delimited field without copying. Caller must not retain it. */
@@ -194,6 +193,12 @@ interface PendingRequest {
    * are reported as warnings instead.
    */
   primary: boolean;
+}
+
+/** Human-readable subject of a request key, without its scheme prefix. */
+function subjectOf(key: RequestKey): string {
+  if (key === "list") return "the service list";
+  return key.slice(key.indexOf(":") + 1);
 }
 
 /* ================================================================== *
@@ -403,14 +408,40 @@ export class ReflectionUnavailableError extends Error {
     cause?: unknown,
   ) {
     super(
-      `server at ${address} does not implement the gRPC reflection service ` +
-        `(${versionsTried.join(" and ")} both UNIMPLEMENTED). ` +
-        `Register it on the server, or pass protoPaths instead.`,
+      `server at ${address} answered but does not implement the gRPC ` +
+        `reflection service (${versionsTried.join(" and ")} both reported ` +
+        `UNIMPLEMENTED/NOT_FOUND). Register the reflection service on the ` +
+        `server, or pass protoPaths instead.`,
       { cause },
     );
     this.name = "ReflectionUnavailableError";
     this.address = address;
     this.versionsTried = versionsTried;
+  }
+}
+
+/**
+ * The reflection stream could not be established or was lost in transport.
+ *
+ * Separate from ReflectionUnavailableError on purpose. "nothing is listening on
+ * this port" and "something is listening but serves no reflection" call for
+ * completely different fixes, and a bare `14 UNAVAILABLE` from grpc-js names
+ * neither the operation that failed nor which of the two it was.
+ */
+export class ReflectionTransportError extends Error {
+  readonly address: string;
+  readonly code?: number;
+
+  constructor(address: string, code: number | undefined, detail: string) {
+    super(
+      `could not complete the reflection handshake with ${address}` +
+        (code !== undefined ? ` (gRPC status ${code})` : "") +
+        `: ${detail}. This is a connectivity or transport failure, not a ` +
+        `missing reflection service — nothing was reached that could answer.`,
+    );
+    this.name = "ReflectionTransportError";
+    this.address = address;
+    this.code = code;
   }
 }
 
@@ -434,7 +465,7 @@ export type ReflectionVersion = "v1" | "v1alpha";
 export interface ReflectionSessionOptions {
   address: string;
   credentials: import("@grpc/grpc-js").ChannelCredentials;
-  metadata?: Record<string, string | string[]>;
+  metadata?: Record<string, string | string[] | Buffer | Buffer[]>;
   /** Wall-clock budget for the whole session. Default 5000. */
   timeoutMs?: number;
   channelOptions?: Record<string, unknown>;
@@ -490,21 +521,110 @@ interface CallHandle {
   on: (ev: string, fn: (...a: unknown[]) => void) => void;
 }
 
+/**
+ * A stream that failed before the server said anything a reflection service
+ * would say.
+ *
+ * The flag matters more than the status code. A version fallback is only sound
+ * while the server has not yet demonstrated that it speaks this version of the
+ * protocol; once it has answered even once, retrying on another version would
+ * discard everything received so far and then blame a missing service for a
+ * failure that happened mid-conversation.
+ */
+interface VersionProbeFailure {
+  readonly versionMissing: true;
+  readonly cause: unknown;
+}
+
+function isProbeFailure(e: unknown): e is VersionProbeFailure {
+  return (
+    typeof e === "object" &&
+    e !== null &&
+    (e as { versionMissing?: unknown }).versionMissing === true
+  );
+}
+
 function statusCodeOf(err: unknown): number | undefined {
   const code = (err as { code?: unknown } | undefined)?.code;
   return typeof code === "number" ? code : undefined;
 }
 
-/**
- * True when the failure means "this reflection version is not served here",
- * as opposed to a transport or auth problem. Decided on the numeric status
- * code; some implementations answer the v1 path with NOT_FOUND rather than
- * UNIMPLEMENTED, and both mean the same thing for our purposes.
- */
-function isVersionMissing(err: unknown): boolean {
-  const code = statusCodeOf(err);
-  return code === GRPC_UNIMPLEMENTED || code === GRPC_NOT_FOUND;
+function messageOf(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
 }
+
+/* ================================================================== *
+ * Option validation
+ * ================================================================== */
+
+function assertPositive(name: string, value: unknown, min: number): void {
+  if (value === undefined) return;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < min) {
+    throw new RangeError(
+      `${name} must be a finite number >= ${min}; received ` +
+        `${typeof value === "number" ? value : typeof value}.`,
+    );
+  }
+}
+
+function validateSessionOptions(options: ReflectionSessionOptions): void {
+  if (typeof options.address !== "string" || options.address === "") {
+    throw new TypeError("reflection requires a non-empty address.");
+  }
+  assertPositive("timeoutMs", options.timeoutMs, 1);
+  assertPositive("maxFiles", options.maxFiles, 1);
+  assertPositive("maxBytes", options.maxBytes, 1);
+  if (
+    options.version !== undefined &&
+    options.version !== "v1" &&
+    options.version !== "v1alpha"
+  ) {
+    throw new TypeError(
+      `reflectionVersion must be "v1" or "v1alpha"; received ` +
+        `${String(options.version)}.`,
+    );
+  }
+}
+
+/**
+ * Builds request metadata, attributing a rejected header to its key.
+ *
+ * grpc-js validates key syntax inside `add` and its error names neither the key
+ * nor the operation, so one bad header used to surface as an unexplained
+ * rejection that the version-fallback logic then had to guess about.
+ */
+function buildMetadata(
+  grpc: { Metadata: new () => { add: (k: string, v: never) => void } },
+  source: ReflectionSessionOptions["metadata"],
+): { add: (k: string, v: never) => void } {
+  const md = new grpc.Metadata();
+  for (const [key, value] of Object.entries(source ?? {})) {
+    const items = Array.isArray(value) ? value : [value];
+    for (const item of items) {
+      if (typeof item !== "string" && !Buffer.isBuffer(item)) {
+        throw new TypeError(
+          `reflection metadata["${key}"] must be a string, a Buffer, or an ` +
+            `array of those; received ${item === null ? "null" : typeof item}.`,
+        );
+      }
+      try {
+        md.add(key, item as never);
+      } catch (e) {
+        throw new TypeError(
+          `reflection metadata key "${key}" was rejected by grpc-js: ` +
+            `${messageOf(e)}. Keys must match [0-9a-z_.-]+, and only keys ` +
+            `ending in "-bin" may carry Buffers.`,
+        );
+      }
+    }
+  }
+  return md;
+}
+
+/* ================================================================== *
+ * Version negotiation
+ * ================================================================== */
 
 async function withVersionFallback(
   options: ReflectionSessionOptions,
@@ -525,8 +645,12 @@ async function withVersionFallback(
       }
       return outcome;
     } catch (e) {
-      if (!isVersionMissing(e)) throw e;
-      lastMissing = e;
+      // Only a pre-answer UNIMPLEMENTED/NOT_FOUND is a version probe. Anything
+      // else — including the same status arriving after the server has already
+      // supplied descriptors — is a real failure, and retrying it on another
+      // version would throw away the work and misattribute the cause.
+      if (!isProbeFailure(e)) throw e;
+      lastMissing = e.cause;
     }
   }
   throw new ReflectionUnavailableError(options.address, versions, lastMissing);
@@ -543,24 +667,49 @@ function runSession(
   const host = options.host ?? "";
 
   return loadGrpc().then(({ grpc }) => {
-    const client = new grpc.Client(
-      options.address,
-      options.credentials,
-      options.channelOptions as never,
+    const md = buildMetadata(
+      grpc as unknown as {
+        Metadata: new () => { add: (k: string, v: never) => void };
+      },
+      options.metadata,
     );
 
-    const md = new grpc.Metadata();
-    for (const [k, v] of Object.entries(options.metadata ?? {})) {
-      for (const item of Array.isArray(v) ? v : [v]) md.add(k, item);
+    let client: InstanceType<typeof grpc.Client>;
+    try {
+      client = new grpc.Client(
+        options.address,
+        options.credentials,
+        options.channelOptions as never,
+      );
+    } catch (e) {
+      throw new ReflectionTransportError(
+        options.address,
+        undefined,
+        `the channel could not be created: ${messageOf(e)}. Expected host:port`,
+      );
     }
 
-    const call = client.makeBidiStreamRequest(
-      REFLECTION_PATHS[version],
-      (v: Buffer) => v,
-      (b: Buffer) => b,
-      md,
-      { deadline: new Date(Date.now() + timeoutMs) } as never,
-    ) as unknown as CallHandle;
+    let call: CallHandle;
+    try {
+      call = client.makeBidiStreamRequest(
+        REFLECTION_PATHS[version],
+        (v: Buffer) => v,
+        (b: Buffer) => b,
+        md as never,
+        { deadline: new Date(Date.now() + timeoutMs) } as never,
+      ) as unknown as CallHandle;
+    } catch (e) {
+      try {
+        client.close();
+      } catch {
+        /* nothing to close */
+      }
+      throw new ReflectionTransportError(
+        options.address,
+        statusCodeOf(e),
+        messageOf(e),
+      );
+    }
 
     return new Promise<ReflectionOutcome>((resolve, reject) => {
       const descriptors = new Map<string, Buffer>();
@@ -573,25 +722,34 @@ function runSession(
       let totalBytes = 0;
       let settled = false;
       let pairingWarned = false;
-
-      const guard = setTimeout(() => {
-        fail(
-          new ReflectionProtocolError(
-            `reflection session at ${options.address} did not complete within ${timeoutMs}ms`,
-            describePending(),
-          ),
-        );
-      }, timeoutMs + 250);
-      // The local guard is intentionally slightly later than the call deadline,
-      // so a server that respects the deadline produces the real gRPC status
-      // rather than this generic message.
-      guard.unref?.();
+      /**
+       * Set as soon as one reply is decoded, whatever it contained. From this
+       * point the server has proved it speaks this version of the reflection
+       * protocol, so no later failure may be reinterpreted as "wrong version".
+       */
+      let serverAnswered = false;
 
       const describePending = (): string | undefined => {
         if (pending.size === 0) return undefined;
         const keys = [...pending.keys()].slice(0, 5).join(", ");
-        return `still awaiting ${pending.size} reply(ies): ${keys}${pending.size > 5 ? ", …" : ""}`;
+        return `still awaiting ${pending.size} reply(ies): ${keys}${
+          pending.size > 5 ? ", …" : ""
+        }`;
       };
+
+      const guard = setTimeout(() => {
+        fail(
+          new ReflectionProtocolError(
+            `reflection session at ${options.address} did not complete within ` +
+              `${timeoutMs}ms`,
+            describePending(),
+          ),
+        );
+      }, timeoutMs + 250);
+      // Intentionally slightly later than the call deadline, so a server that
+      // respects the deadline produces the real gRPC status rather than this
+      // generic message.
+      guard.unref?.();
 
       const teardown = (): void => {
         clearTimeout(guard);
@@ -612,6 +770,28 @@ function runSession(
         settled = true;
         teardown();
         reject(err);
+      }
+
+      /**
+       * Fails in a way withVersionFallback may retry on the other version.
+       *
+       * Refuses to do so once the server has answered: at that point the status
+       * describes something that went wrong mid-conversation, and the honest
+       * report is the transport error, not "no reflection service here".
+       */
+      function failVersion(cause: unknown): void {
+        if (serverAnswered) {
+          fail(
+            new ReflectionProtocolError(
+              `the reflection stream at ${options.address} failed after the ` +
+                `server had already answered, so ${version} is served here; ` +
+                `${descriptors.size} file(s) were discarded`,
+              messageOf(cause),
+            ),
+          );
+          return;
+        }
+        fail({ versionMissing: true, cause } satisfies VersionProbeFailure);
       }
 
       function succeed(): void {
@@ -638,11 +818,14 @@ function runSession(
 
       const ask = (key: RequestKey, primary: boolean): void => {
         if (settled || asked.has(key)) return;
-        if (descriptors.size + pending.size >= maxFiles) {
+        // Counts everything requested rather than everything received: the cap
+        // exists to bound the walk, and a graph that fans out to a million
+        // imports must be stopped while asking, not after answering.
+        if (asked.size >= maxFiles) {
           fail(
             new ReflectionProtocolError(
               `reflection closure exceeded maxFiles=${maxFiles}`,
-              `while requesting ${key}`,
+              `while requesting ${subjectOf(key)}`,
             ),
           );
           return;
@@ -652,7 +835,13 @@ function runSession(
         try {
           call.write(encodeRequest(key, host));
         } catch (e) {
-          fail(e);
+          fail(
+            new ReflectionTransportError(
+              options.address,
+              statusCodeOf(e),
+              `writing the request for ${subjectOf(key)} failed: ${messageOf(e)}`,
+            ),
+          );
         }
       };
 
@@ -687,11 +876,13 @@ function runSession(
 
       const acceptFiles = (raw: Buffer[]): void => {
         for (const bytes of raw) {
+          if (settled) return;
           totalBytes += bytes.length;
           if (totalBytes > maxBytes) {
             fail(
               new ReflectionProtocolError(
                 `reflection payload exceeded maxBytes=${maxBytes}`,
+                `after ${descriptors.size} file(s)`,
               ),
             );
             return;
@@ -704,7 +895,7 @@ function runSession(
             fail(
               new ReflectionProtocolError(
                 "server returned a FileDescriptorProto that could not be parsed",
-                e instanceof Error ? e.message : String(e),
+                messageOf(e),
               ),
             );
             return;
@@ -721,6 +912,7 @@ function runSession(
 
           for (const dep of meta.dependencies) {
             if (!descriptors.has(dep)) ask(`file:${dep}`, false);
+            if (settled) return;
           }
         }
       };
@@ -732,14 +924,18 @@ function runSession(
         try {
           reply = decodeReply(chunk as Buffer);
         } catch (e) {
+          // A reply arrived and was unintelligible. The server is speaking
+          // something on this path, so this is not a version mismatch.
+          serverAnswered = true;
           fail(
             new ReflectionProtocolError(
               "malformed ServerReflectionResponse",
-              e instanceof Error ? e.message : String(e),
+              messageOf(e),
             ),
           );
           return;
         }
+        serverAnswered = true;
 
         const request = settleRequest(reply.answers);
 
@@ -750,7 +946,9 @@ function runSession(
             if (!request || request.primary) {
               fail(
                 new ReflectionProtocolError(
-                  `reflection request ${request?.key ?? "(unknown)"} failed`,
+                  `reflection request for ${
+                    request ? subjectOf(request.key) : "(unknown)"
+                  } failed`,
                   detail,
                 ),
               );
@@ -759,7 +957,7 @@ function runSession(
             // A missing dependency will very likely make the set unloadable,
             // but naming the file beats reporting "reflection failed".
             notes.push(
-              `server could not supply ${request.key.slice(5)} — ${detail}. ` +
+              `server could not supply ${subjectOf(request.key)} — ${detail}. ` +
                 `The descriptor set may be incomplete.`,
             );
             break;
@@ -768,7 +966,7 @@ function runSession(
           case "files":
             if (reply.body.descriptors.length === 0 && request?.primary) {
               notes.push(
-                `server returned an empty file set for ${request.key}.`,
+                `server returned an empty file set for ${subjectOf(request.key)}.`,
               );
             }
             acceptFiles(reply.body.descriptors);
@@ -782,7 +980,10 @@ function runSession(
               const targets = services.filter(
                 (n) => !n.startsWith("grpc.reflection."),
               );
-              for (const symbol of targets) ask(`sym:${symbol}`, true);
+              for (const symbol of targets) {
+                ask(`sym:${symbol}`, true);
+                if (settled) return;
+              }
             }
             break;
           }
@@ -790,7 +991,9 @@ function runSession(
           case "other":
             notes.push(
               `ignored an unexpected reflection response variant ` +
-                `(field ${reply.body.field}) for ${request?.key ?? "(unknown request)"}.`,
+                `(field ${reply.body.field}) for ${
+                  request ? subjectOf(request.key) : "(unknown request)"
+                }.`,
             );
             break;
         }
@@ -798,19 +1001,40 @@ function runSession(
         if (pending.size === 0 && !wantsServices) succeed();
       });
 
-      call.on("error", (err) => fail(err));
+      call.on("error", (err) => {
+        if (settled) return;
+        const code = statusCodeOf(err);
+        if (code === GRPC_UNIMPLEMENTED || code === GRPC_NOT_FOUND) {
+          // Some implementations answer the v1 path with NOT_FOUND rather than
+          // UNIMPLEMENTED; both mean "this version is not served here", but
+          // only before the server has answered anything.
+          failVersion(err);
+          return;
+        }
+        fail(
+          new ReflectionTransportError(options.address, code, messageOf(err)),
+        );
+      });
+
       call.on("status", (s) => {
         if (settled) return;
         const st = s as { code: number; details?: string };
         if (st.code !== 0) {
-          // Surfaced with the numeric code intact so withVersionFallback can
-          // decide whether this means "wrong version" or a real failure.
+          const detail = `${st.code} ${st.details ?? ""}`.trim();
+          if (st.code === GRPC_UNIMPLEMENTED || st.code === GRPC_NOT_FOUND) {
+            failVersion(
+              Object.assign(new Error(`reflection stream ended: ${detail}`), {
+                code: st.code,
+                details: st.details,
+              }),
+            );
+            return;
+          }
           fail(
-            Object.assign(
-              new Error(
-                `reflection stream ended: ${st.code} ${st.details ?? ""}`.trim(),
-              ),
-              { code: st.code, details: st.details },
+            new ReflectionTransportError(
+              options.address,
+              st.code,
+              st.details || "the stream ended with a non-OK status",
             ),
           );
           return;
@@ -839,7 +1063,10 @@ function runSession(
       });
 
       if (op.kind === "symbols") {
-        for (const symbol of op.symbols) ask(`sym:${symbol}`, true);
+        for (const symbol of op.symbols) {
+          ask(`sym:${symbol}`, true);
+          if (settled) return;
+        }
       } else {
         ask("list", true);
       }
@@ -852,24 +1079,28 @@ function runSession(
  * ================================================================== */
 
 /**
- * Serialises files in dependency order.
- *
- * FileDescriptorSet { repeated FileDescriptorProto file = 1; }
+ * Orders files so that every file follows the files it imports.
  *
  * Map iteration order reflects the order the server happened to answer in,
- * which is not stable across runs. Sorting topologically makes the output
- * byte-for-byte reproducible and puts every file after the files it imports,
- * which is what descriptor consumers expect.
+ * which is not stable across runs. A topological order makes the output
+ * byte-for-byte reproducible and is what descriptor consumers expect.
+ *
+ * The order is returned rather than only applied, because the caller has to
+ * report the same sequence as its file list: two differently-sorted views of
+ * one set let a consumer pair `files[i]` with the wrong descriptor.
  */
-export function serializeDescriptorSet(
-  descriptors: Map<string, Buffer>,
-): Buffer {
+function orderFiles(descriptors: Map<string, Buffer>): {
+  ordered: string[];
+  cycles: string[];
+} {
   const deps = new Map<string, string[]>();
   for (const [name, bytes] of descriptors) {
     let meta: FileMeta;
     try {
       meta = peekFileMeta(bytes);
     } catch {
+      // Unparseable here is not fatal: the bytes still go into the set, and the
+      // descriptor decoder downstream will report what is wrong with them.
       deps.set(name, []);
       continue;
     }
@@ -880,22 +1111,40 @@ export function serializeDescriptorSet(
   }
 
   const ordered: string[] = [];
+  const cycles: string[] = [];
   const state = new Map<string, "visiting" | "done">();
 
   const visit = (name: string): void => {
     const current = state.get(name);
     if (current === "done") return;
-    // A cycle is illegal in proto and cannot be resolved by ordering; emitting
-    // the file once and moving on is strictly better than looping.
-    if (current === "visiting") return;
+    if (current === "visiting") {
+      // A cycle is illegal in proto and cannot be resolved by ordering. Emitting
+      // the file once and moving on beats looping, but it is a real finding
+      // about the server's descriptors and must not be swallowed.
+      if (!cycles.includes(name)) cycles.push(name);
+      return;
+    }
     state.set(name, "visiting");
     for (const dep of deps.get(name) ?? []) visit(dep);
     state.set(name, "done");
     ordered.push(name);
   };
 
+  // Sorted entry points, so the traversal itself is deterministic too.
   for (const name of [...descriptors.keys()].sort()) visit(name);
 
+  return { ordered, cycles };
+}
+
+/**
+ * Serialises files in dependency order.
+ *
+ * FileDescriptorSet { repeated FileDescriptorProto file = 1; }
+ */
+export function serializeDescriptorSet(
+  descriptors: Map<string, Buffer>,
+): Buffer {
+  const { ordered } = orderFiles(descriptors);
   return Buffer.concat(
     ordered.map((name) => lengthDelimited(1, descriptors.get(name)!)),
   );
@@ -923,6 +1172,7 @@ export interface ListServicesResult {
 export async function listServicesDetailed(
   options: ReflectionSessionOptions,
 ): Promise<ListServicesResult> {
+  validateSessionOptions(options);
   const outcome = await withVersionFallback(options, { kind: "list" });
   const services = (outcome.services ?? [])
     .filter((n) => !n.startsWith("grpc.reflection."))
@@ -940,7 +1190,14 @@ export async function listServices(
 export interface DescriptorSetResult {
   /** Serialised FileDescriptorSet, in dependency order. */
   descriptorSet: Buffer;
-  /** Filenames included, in the same order. */
+  /**
+   * Filenames included, in the same order as the descriptors inside
+   * `descriptorSet`.
+   *
+   * The correspondence is positional and load-bearing: `files[i]` names the
+   * i-th FileDescriptorProto in the set. Sorting this list independently — which
+   * it used to be — silently broke that pairing for anyone who relied on it.
+   */
   files: string[];
   version: ReflectionVersion;
   notes: string[];
@@ -956,13 +1213,25 @@ function assemble(
       outcome.notes.join(" ") || undefined,
     );
   }
-  const descriptorSet = serializeDescriptorSet(outcome.descriptors);
-  const files = [...outcome.descriptors.keys()].sort();
+
+  const { ordered, cycles } = orderFiles(outcome.descriptors);
+  const notes = [...outcome.notes];
+  if (cycles.length > 0) {
+    notes.push(
+      `${cycles.length} file(s) take part in an import cycle, which protoc ` +
+        `cannot produce: ${cycles.slice(0, 5).join(", ")}` +
+        (cycles.length > 5 ? ", …" : "") +
+        `. They were emitted once each; the descriptor set may not load.`,
+    );
+  }
+
   return {
-    descriptorSet,
-    files,
+    descriptorSet: Buffer.concat(
+      ordered.map((name) => lengthDelimited(1, outcome.descriptors.get(name)!)),
+    ),
+    files: ordered,
     version: outcome.version,
-    notes: outcome.notes,
+    notes,
   };
 }
 
@@ -970,9 +1239,22 @@ function assemble(
 export async function fetchDescriptorSet(
   options: ReflectionSessionOptions & { symbols: string[] },
 ): Promise<DescriptorSetResult> {
-  if (options.symbols.length === 0) {
-    throw new Error("fetchDescriptorSet requires at least one symbol.");
+  validateSessionOptions(options);
+  if (!Array.isArray(options.symbols) || options.symbols.length === 0) {
+    throw new TypeError(
+      "fetchDescriptorSet requires a non-empty array of symbol names.",
+    );
   }
+  const bad = options.symbols.findIndex(
+    (s) => typeof s !== "string" || s === "",
+  );
+  if (bad !== -1) {
+    throw new TypeError(
+      `symbols[${bad}] is not a non-empty string (got ` +
+        `${typeof options.symbols[bad]}).`,
+    );
+  }
+
   const outcome = await withVersionFallback(options, {
     kind: "symbols",
     symbols: options.symbols,
@@ -994,6 +1276,7 @@ export interface FullDescriptorSetResult extends DescriptorSetResult {
 export async function fetchFullDescriptorSet(
   options: ReflectionSessionOptions,
 ): Promise<FullDescriptorSetResult> {
+  validateSessionOptions(options);
   const outcome = await withVersionFallback(options, {
     kind: "list_then_symbols",
   });
@@ -1003,6 +1286,10 @@ export async function fetchFullDescriptorSet(
     .sort();
 
   if (services.length === 0) {
+    // Reflection worked; there is simply nothing behind it. Returning an empty
+    // set rather than throwing keeps this distinguishable from every failure
+    // mode above, which is the whole reason the caller can produce a useful
+    // message instead of "reflection failed".
     return {
       services,
       descriptorSet: Buffer.alloc(0),
