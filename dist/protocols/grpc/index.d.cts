@@ -259,7 +259,7 @@ interface SymbolEntry {
      * failure mode that made method lists silently empty.
      */
     type: unknown;
-    /** File the symbol was declared in, for diagnostics. */
+    /** File the symbol was declared in, or "(unnamed)" when descriptors carry none. */
     file: string;
 }
 interface Catalog {
@@ -276,6 +276,32 @@ interface Catalog {
     notes: string[];
     /** Proto files loaded, or descriptor file names when source is reflection. */
     files?: string[];
+    /**
+     * File names carried by the descriptors that were decoded and indexed.
+     *
+     * Deliberately separate from `files`: under the proto source `files` is what
+     * was found on disk, and a gap between the two is precisely the "an entire
+     * .proto's symbols are missing" failure. Reporting only one number made that
+     * gap unobservable.
+     */
+    descriptorFiles: string[];
+    /**
+     * Fully-qualified names of synthetic map-entry messages.
+     *
+     * They are deliberately absent from `symbols` — a user can never name one —
+     * but anything resolving a field's `type_name` still has to tell "this is a
+     * map entry" apart from "this type is missing".
+     */
+    mapEntries: Set<string>;
+    /**
+     * True when none of the decoded descriptors carried a file name.
+     *
+     * protobufjs-synthesised descriptors (what @grpc/proto-loader attaches, and
+     * what many servers answer reflection with) leave FileDescriptorProto.name
+     * unset. Every diagnostic keyed on file names is meaningless then and must
+     * say so rather than report each file as missing.
+     */
+    descriptorFilesUnnamed: boolean;
 }
 declare function buildCatalog(endpoint: GrpcEndpoint): Promise<{
     catalog: Catalog;

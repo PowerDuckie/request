@@ -8,7 +8,7 @@ import {
   pick,
   type FieldDescriptor,
 } from "./descriptor-types.js";
-import { LOADER_OPTIONS, type Catalog } from "./catalog.js";
+import { LOADER_OPTIONS, resolveTypeName, type Catalog } from "./catalog.js";
 
 export interface OneofHint {
   /** Dot path of the containing message; "" means the root message. */
@@ -251,7 +251,13 @@ export function buildMessageTemplate(
     hintDepth: 0,
   };
 
-  const fq = stripDot(messageName);
+  // The root message name comes from a resolved method, where it is already
+  // fully qualified. It is still routed through the resolver so that a relative
+  // input resolves rather than failing — with an empty scope the resolver
+  // degrades to an exact lookup, which is the old behaviour.
+  const requested = stripDot(messageName);
+  const fq = resolveMessageRef(ctx, "", messageName) ?? requested;
+
   let example: Record<string, unknown> = {};
   try {
     example = buildMessage(ctx, fq, "", 0) ?? {};
@@ -296,16 +302,62 @@ function withoutHints<T>(ctx: Ctx, fn: () => T): T {
   }
 }
 
+/* ------------------------------------------------------------------ *
+ * Symbol lookup
+ *
+ * Every type reference goes through catalog.resolveTypeName rather than an
+ * exact `symbols.get(stripDot(typeName))`. The exact lookup only works on
+ * descriptors produced by protoc; the ones this library actually receives are
+ * synthesised by protobufjs and carry the reference as written in the .proto
+ * source, so `common.Meta` inside package `demo.echo` never matched the
+ * `demo.common.Meta` sitting in the table.
+ * ------------------------------------------------------------------ */
+
+/** Resolves a reference and confirms it names a message. */
+function resolveMessageRef(
+  ctx: Ctx,
+  scope: string,
+  ref: string,
+): string | undefined {
+  const fq = resolveTypeName(ctx.catalog, scope, ref);
+  if (fq === undefined) return undefined;
+  return ctx.catalog.symbols.get(fq)?.kind === "message" ? fq : undefined;
+}
+
+/** Resolves a reference and confirms it names an enum. */
+function resolveEnumRef(
+  ctx: Ctx,
+  scope: string,
+  ref: string,
+): string | undefined {
+  const fq = resolveTypeName(ctx.catalog, scope, ref);
+  if (fq === undefined) return undefined;
+  return ctx.catalog.symbols.get(fq)?.kind === "enum" ? fq : undefined;
+}
+
 function lookupMessage(ctx: Ctx, fq: string): unknown | undefined {
   const entry = ctx.catalog.symbols.get(fq);
-  if (entry?.kind === "message") return entry.type;
-  return undefined;
+  return entry?.kind === "message" ? entry.type : undefined;
 }
 
 function lookupEnum(ctx: Ctx, fq: string): unknown | undefined {
   const entry = ctx.catalog.symbols.get(fq);
-  if (entry?.kind === "enum") return entry.type;
-  return undefined;
+  return entry?.kind === "enum" ? entry.type : undefined;
+}
+
+/**
+ * Best-effort display name for a type reference that may not resolve.
+ *
+ * Hints are consumed by a UI, so an unresolvable reference still has to be
+ * shown as something the user can recognise from their .proto — the raw
+ * reference is exactly that, and inventing a qualified name would be worse.
+ */
+function displayType(ctx: Ctx, scope: string, field: FieldDescriptor): string {
+  if (!field.typeName) return field.type;
+  return (
+    resolveTypeName(ctx.catalog, scope, field.typeName) ??
+    stripDot(field.typeName)
+  );
 }
 
 /**
@@ -313,7 +365,7 @@ function lookupEnum(ctx: Ctx, fq: string): unknown | undefined {
  * with map_entry=true.
  *
  * The catalog deliberately does not register map-entry types as addressable
- * symbols, so the only way to resolve one is through the declaring message's
+ * symbols, so the only way to read one is through the declaring message's
  * nested types. There is no global-lookup fallback: pretending there is one
  * would hide a catalog regression behind a second code path.
  *
@@ -325,12 +377,16 @@ function lookupEnum(ctx: Ctx, fq: string): unknown | undefined {
 function findMapEntry(
   ctx: Ctx,
   parentFq: string,
-  entryFq: string,
+  entryRef: string,
 ): { keyType: string; valueField: FieldDescriptor } | undefined {
   const parent = lookupMessage(ctx, parentFq);
   if (!parent) return undefined;
 
-  const shortName = entryFq.slice(entryFq.lastIndexOf(".") + 1);
+  // Only the last component is compared, because the reference may be written
+  // relatively and the entry is by construction nested directly in the parent.
+  const bare = stripDot(entryRef);
+  const shortName = bare.slice(bare.lastIndexOf(".") + 1);
+
   try {
     for (const nested of readNestedTypes(parent)) {
       if (String(pick(nested, "name", "name") ?? "") !== shortName) continue;
@@ -346,6 +402,38 @@ function findMapEntry(
     return undefined;
   }
   return undefined;
+}
+
+/* ------------------------------------------------------------------ *
+ * Oneof classification
+ * ------------------------------------------------------------------ */
+
+/**
+ * Recognises the synthetic oneof protoc generates for a proto3 `optional`
+ * field, by structure rather than by the `proto3_optional` flag.
+ *
+ * The flag is the correct signal and is checked first, but it is not always
+ * present: descriptors synthesised by protobufjs may omit it while still
+ * emitting the wrapper oneof. When that happened, `optional string nickname`
+ * was presented as a real one-branch oneof named `_nickname` and pre-filled
+ * with `""` — so a user who set nothing sent an explicitly-present empty
+ * string, and the server reported `had_nickname: true`. That is the exact
+ * failure the "never silently set an explicit-presence field" rule exists to
+ * prevent, arriving through the back door.
+ *
+ * The structural signature is fixed by the protobuf compiler and unambiguous: a
+ * synthetic oneof contains exactly one member and is named `_` followed by that
+ * member's name. A hand-written oneof cannot collide with it, because a leading
+ * underscore in a oneof name is reserved for exactly this purpose.
+ */
+function isSyntheticOneof(
+  oneofName: string | undefined,
+  members: FieldDescriptor[],
+): boolean {
+  if (members.length !== 1) return false;
+  if (oneofName === undefined) return false;
+  if (members[0].label === "LABEL_REPEATED") return false;
+  return oneofName === `_${members[0].name}`;
 }
 
 function buildMessage(
@@ -376,8 +464,9 @@ function buildMessage(
   if (!type) {
     warn(
       ctx,
-      `message "${fq}" could not be resolved at "${path || "(root)"}"; ` +
-        `left as an empty object. The descriptor closure may be incomplete.`,
+      `message "${fq}" is not in the symbol table (referenced at ` +
+        `"${path || "(root)"}"); left as an empty object. The descriptor ` +
+        `closure is incomplete — the catalog notes say which references failed.`,
     );
     return {};
   }
@@ -388,14 +477,48 @@ function buildMessage(
     const oneofNames = readOneofNames(type);
     const out: Record<string, unknown> = {};
 
-    /** oneofIndex -> member fields, excluding synthetic proto3 optionals. */
-    const realOneofs = new Map<number, FieldDescriptor[]>();
+    // Group every oneof member first, then classify. Classification needs the
+    // whole group (a synthetic oneof is defined partly by having one member),
+    // so it cannot be decided field by field during collection.
+    const grouped = new Map<number, FieldDescriptor[]>();
     for (const field of fields) {
       if (field.oneofIndex === undefined) continue;
-      if (field.proto3Optional) continue; // synthetic wrapper, not a real oneof
-      const list = realOneofs.get(field.oneofIndex) ?? [];
+      const list = grouped.get(field.oneofIndex) ?? [];
       list.push(field);
-      realOneofs.set(field.oneofIndex, list);
+      grouped.set(field.oneofIndex, list);
+    }
+
+    /** oneofIndex -> members, for genuine user-declared oneofs only. */
+    const realOneofs = new Map<number, FieldDescriptor[]>();
+    /** Fields that are explicit-presence singulars, by field name. */
+    const explicitPresence = new Set<string>();
+
+    for (const [index, members] of grouped) {
+      const synthetic =
+        members.every((m) => m.proto3Optional) ||
+        isSyntheticOneof(oneofNames[index], members);
+      if (synthetic) {
+        for (const m of members) explicitPresence.add(m.name);
+      } else {
+        // A mixed group — some members flagged proto3_optional, some not — is
+        // not a shape protoc can emit. Treating it as a real oneof would
+        // pre-fill one branch; treating it as presence would pre-fill none.
+        // Presence is the safe side: it can only omit, never fabricate.
+        const flagged = members.filter((m) => m.proto3Optional);
+        if (flagged.length > 0) {
+          warn(
+            ctx,
+            `oneof "${oneofNames[index] ?? index}" in ${fq} mixes ` +
+              `${flagged.length} explicit-presence member(s) with ` +
+              `${members.length - flagged.length} plain one(s), which protoc ` +
+              `does not produce. All of them are treated as optional fields ` +
+              `and left unset; set at most one by hand.`,
+          );
+          for (const m of members) explicitPresence.add(m.name);
+        } else {
+          realOneofs.set(index, members);
+        }
+      }
     }
 
     const handledOneofs = new Set<number>();
@@ -405,11 +528,7 @@ function buildMessage(
       const fieldPath = joinPath(path, field.name);
 
       // --- real oneof: pre-fill one branch, describe them all ---------------
-      if (
-        field.oneofIndex !== undefined &&
-        !field.proto3Optional &&
-        realOneofs.has(field.oneofIndex)
-      ) {
+      if (field.oneofIndex !== undefined && realOneofs.has(field.oneofIndex)) {
         if (handledOneofs.has(field.oneofIndex)) continue;
         handledOneofs.add(field.oneofIndex);
 
@@ -459,7 +578,7 @@ function buildMessage(
       }
 
       // --- explicit presence: describe, do not silently set -----------------
-      if (field.proto3Optional) {
+      if (field.proto3Optional || explicitPresence.has(field.name)) {
         // Hints are suppressed while computing the value: this field's presence
         // is described by the entry pushed below, and a message-typed
         // `optional` would otherwise also emit a "message" hint for the same
@@ -504,16 +623,13 @@ function buildFieldValue(
 
   // Map field: repeated synthetic map_entry message.
   if (isRepeated && field.type === "TYPE_MESSAGE" && field.typeName) {
-    const entryFq = stripDot(field.typeName);
-    const mapInfo = findMapEntry(ctx, parentFq, entryFq);
+    const mapInfo = findMapEntry(ctx, parentFq, field.typeName);
     if (mapInfo) {
       if (recording(ctx)) {
         ctx.collections.push({
           at: path,
           kind: "map",
-          of: mapInfo.valueField.typeName
-            ? stripDot(mapInfo.valueField.typeName)
-            : mapInfo.valueField.type,
+          of: displayType(ctx, parentFq, mapInfo.valueField),
           keyOf: mapInfo.keyType,
         });
       }
@@ -531,13 +647,13 @@ function buildFieldValue(
       // is dropped instead and the user starts from an empty map.
       return sampleValue === OMIT ? {} : { [sampleKey]: sampleValue };
     }
-    // A repeated message whose entry type resolves to nothing: treat as a
-    // plain repeated message field, but say so — silently emitting `[]` for
+    // A repeated message whose entry type is not a readable map entry: treat as
+    // a plain repeated message field, but say so — silently emitting `[]` for
     // what the user wrote as `map<...>` would be a lie about the schema.
     warn(
       ctx,
-      `"${path}" is a repeated ${entryFq} that could not be resolved as a ` +
-        `map entry; treating it as a repeated message field.`,
+      `"${path}" is a repeated ${stripDot(field.typeName)} that could not be ` +
+        `read as a map entry; treating it as a repeated message field.`,
     );
   }
 
@@ -546,7 +662,7 @@ function buildFieldValue(
       ctx.collections.push({
         at: path,
         kind: "repeated",
-        of: field.typeName ? stripDot(field.typeName) : field.type,
+        of: displayType(ctx, parentFq, field),
       });
     }
     if (!ctx.seedCollections) return [];
@@ -574,34 +690,49 @@ function buildSingularValue(
 ): unknown {
   if (field.type === "TYPE_ENUM") {
     // readFields guarantees typeName for TYPE_ENUM.
-    const fq = stripDot(field.typeName!);
-    const enumType = lookupEnum(ctx, fq);
+    const ref = field.typeName!;
+    const fq = resolveEnumRef(ctx, parentFq, ref);
+    const shown = fq ?? stripDot(ref);
+
     let values: string[] = [];
-    if (enumType) {
+    if (fq !== undefined) {
+      const enumType = lookupEnum(ctx, fq);
       try {
         values = readEnumValueNames(enumType);
       } catch (e) {
         if (!(e instanceof DescriptorShapeError)) throw e;
-        warn(ctx, `enum "${fq}" at "${path}" is unreadable: ${e.message}`);
+        warn(ctx, `enum "${shown}" at "${path}" is unreadable: ${e.message}`);
       }
     }
+
     if (values.length === 0) {
       warn(
         ctx,
-        `enum "${fq}" at "${path}" has no resolvable values; ` +
-          `the example uses an empty string, which the server will reject.`,
+        fq === undefined
+          ? `enum "${shown}" at "${path}" does not resolve from scope ` +
+              `"${parentFq}"; the example uses an empty string, which the ` +
+              `server will reject. The catalog notes list the failed references.`
+          : `enum "${shown}" at "${path}" declares no values; the example uses ` +
+              `an empty string, which the server will reject.`,
       );
       return "";
     }
-    if (recording(ctx)) ctx.enums.push({ at: path, enum: fq, values });
+    if (recording(ctx)) ctx.enums.push({ at: path, enum: shown, values });
     // enums:String means the JSON form is the value name.
     return values[0];
   }
 
   if (field.type === "TYPE_MESSAGE" || field.type === "TYPE_GROUP") {
-    const fq = stripDot(field.typeName!);
+    const ref = field.typeName!;
+    // Well-known types are matched on the reference itself as well as on the
+    // resolved name: they are usually written fully qualified and are often
+    // absent from the symbol table, since a descriptor set need not include
+    // google/protobuf/*.proto for the loader to handle them.
+    const bare = stripDot(ref);
+    const resolved = resolveMessageRef(ctx, parentFq, ref);
+    const fq = resolved ?? bare;
 
-    if (fq === "google.protobuf.Any") {
+    if (fq === "google.protobuf.Any" || bare === "google.protobuf.Any") {
       warn(
         ctx,
         `"${path}" is google.protobuf.Any; its payload is passed through ` +
@@ -610,7 +741,7 @@ function buildSingularValue(
       );
       return { "@type": "", value: {} };
     }
-    if (FREE_FORM_WELL_KNOWN.has(fq)) {
+    if (FREE_FORM_WELL_KNOWN.has(fq) || FREE_FORM_WELL_KNOWN.has(bare)) {
       warn(
         ctx,
         `"${path}" is ${fq}, whose JSON form is any JSON value; ` +
@@ -619,12 +750,34 @@ function buildSingularValue(
       return {};
     }
     if (fq in WELL_KNOWN) return WELL_KNOWN[fq];
+    if (bare in WELL_KNOWN) return WELL_KNOWN[bare];
+
+    if (resolved === undefined) {
+      warn(
+        ctx,
+        `message "${bare}" at "${path}" does not resolve from scope ` +
+          `"${parentFq}"; left as an empty object, which on the wire means ` +
+          `"set with all defaults". The catalog notes list the failed ` +
+          `references.`,
+      );
+      // Still reported as explicit presence: the field's presence semantics are
+      // a property of the field, not of whether we could read its type.
+      if (recording(ctx)) {
+        ctx.presence.push({
+          at: path,
+          reason: "message",
+          presentInExample: ctx.fillMessageFields,
+          valueIfSet: {},
+        });
+      }
+      return ctx.fillMessageFields ? {} : OMIT;
+    }
 
     // Message-typed fields always have explicit presence. The value is built
     // whether or not the example keeps it: a hint whose valueIfSet is undefined
     // tells the UI nothing, and re-describing the method just to re-add a
     // removed field is exactly what these hints exist to avoid.
-    const value = buildMessage(ctx, fq, path, depth + 1) ?? {};
+    const value = buildMessage(ctx, resolved, path, depth + 1) ?? {};
     if (recording(ctx)) {
       ctx.presence.push({
         at: path,
