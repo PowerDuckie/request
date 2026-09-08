@@ -98,6 +98,89 @@ describe("gRPC server-streaming session state", () => {
   }, 15_000);
 });
 
+describe("gRPC client-streaming session state", () => {
+  it("transitions to closed after Sum completes and waitForClose resolves", async () => {
+    const session = makeSession("Sum");
+    await session.open();
+    expect(session.state).toBe("open");
+    expect(session.kind).toBe("client_streaming");
+
+    const closePromise = session.waitForClose();
+
+    await session.send({ value: 10 });
+    await session.send({ value: 20 });
+    await session.send({ value: 30 });
+    await session.close(); // Finish -> server sends SumReply
+
+    await closePromise; // must not hang
+    expect(session.state).toBe("closed");
+
+    const reply = session.events.find(
+      (e) => e.kind === "data" && e.direction === "in",
+    );
+    expect(reply).toBeDefined();
+    expect((reply?.data as any)?.total).toBe(60);
+    expect((reply?.data as any)?.count).toBe(3);
+  }, 15_000);
+
+  it("rejects send after close on a client-streaming session", async () => {
+    const session = makeSession("Sum");
+    await session.open();
+    await session.send({ value: 1 });
+    await session.close();
+    expect(session.state).toBe("closed");
+    await expect(session.send({ value: 2 })).rejects.toThrow(/not open/);
+  }, 15_000);
+});
+
+describe("gRPC bidi-streaming session state", () => {
+  it("exchanges messages and closes cleanly", async () => {
+    const session = makeSession("Chat");
+    await session.open();
+    expect(session.state).toBe("open");
+    expect(session.kind).toBe("bidi_streaming");
+
+    // Server sends "welcome" immediately.
+    await new Promise((r) => setTimeout(r, 200));
+    const welcome = session.events.find(
+      (e) => e.kind === "data" && e.direction === "in",
+    );
+    expect(welcome).toBeDefined();
+
+    await session.send({ from: "client", text: "hello" });
+    await new Promise((r) => setTimeout(r, 200));
+
+    const replies = session.events.filter(
+      (e) => e.kind === "data" && e.direction === "in",
+    );
+    expect(replies.length).toBeGreaterThanOrEqual(2);
+
+    await session.close();
+    expect(session.state).toBe("closed");
+  }, 15_000);
+
+  it("discards inbound messages after close is initiated", async () => {
+    const session = makeSession("Chat");
+    await session.open();
+    await session.send({ from: "client", text: "before-close" });
+    await new Promise((r) => setTimeout(r, 100));
+
+    const countBeforeClose = session.events.filter(
+      (e) => e.kind === "data" && e.direction === "in",
+    ).length;
+
+    await session.close();
+    expect(session.state).toBe("closed");
+
+    // No new inbound data events should appear after close.
+    await new Promise((r) => setTimeout(r, 200));
+    const countAfterClose = session.events.filter(
+      (e) => e.kind === "data" && e.direction === "in",
+    ).length;
+    expect(countAfterClose).toBe(countBeforeClose);
+  }, 15_000);
+});
+
 describe("gRPC session lifecycle", () => {
   it("rejects open() from a non-idle state", async () => {
     const session = makeSession("Say");

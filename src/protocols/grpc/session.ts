@@ -437,6 +437,7 @@ export function createGrpcManualSession(
         setState("error");
         closeResolve();
       }
+      activeCall = null;
       record({
         direction: "status",
         event: "status",
@@ -463,6 +464,7 @@ export function createGrpcManualSession(
       });
 
       closeResolve();
+      activeCall = null;
     });
 
     call.on("end", () => {
@@ -510,6 +512,8 @@ export function createGrpcManualSession(
               at: Date.now(),
             });
 
+            closeResolve();
+            activeCall = null;
             return;
           }
 
@@ -521,6 +525,7 @@ export function createGrpcManualSession(
           });
 
           markClosed();
+          activeCall = null;
         },
       );
 
@@ -533,6 +538,13 @@ export function createGrpcManualSession(
       attachSharedListeners(activeCall);
 
       activeCall.on("data", (response: unknown) => {
+        // Discard late inbound messages after the client has initiated close.
+        // grpc-js may still deliver buffered frames while the call is
+        // transitioning to status; recording them would confuse the UI
+        // into thinking the stream is still active.
+        if (state === "closing" || state === "closed") {
+          return;
+        }
         record({
           direction: "inbound",
           event: "data",
@@ -681,6 +693,8 @@ export function createGrpcManualSession(
                   at: Date.now(),
                 });
 
+                closeResolve();
+                activeCall = null;
                 reject(error);
                 return;
               }
@@ -697,6 +711,7 @@ export function createGrpcManualSession(
               // guarantees the state transitions even if grpc-js reorders
               // the callback and the status event on a fast local server.
               markClosed();
+              activeCall = null;
 
               resolve();
             },
@@ -733,10 +748,14 @@ export function createGrpcManualSession(
 
         // send() resolves when the stream completes, not when the request is
         // written, so a caller can close() right after send() without racing.
-        await new Promise<void>((resolve, reject) => {
-          call.on("status", () => resolve());
-          call.on("error", (error: unknown) => reject(error));
-        });
+        try {
+          await new Promise<void>((resolve, reject) => {
+            call.on("status", () => resolve());
+            call.on("error", (error: unknown) => reject(error));
+          });
+        } finally {
+          activeCall = null;
+        }
         return;
       }
 
