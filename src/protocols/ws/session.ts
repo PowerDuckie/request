@@ -373,7 +373,11 @@ export function createWsManualSession(
           const reason = reasonBuffer.toString("utf8");
           const wasClean = code === 1000;
 
-          setState("closed");
+          // A failed connection fires 'error' then 'close'. Do not let the
+          // close handler override the more specific "error" state.
+          if (state !== "error") {
+            setState("closed");
+          }
 
           record({
             direction: "meta",

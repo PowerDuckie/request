@@ -428,6 +428,15 @@ export function createGrpcManualSession(
     });
 
     call.on("status", (status: grpc.StatusObject) => {
+      // code 0 = success -> closed; any other code = error.
+      // Checking the code prevents this listener from overriding an "error"
+      // state that the unary/client-streaming callback already set.
+      if (status.code === 0) {
+        markClosed();
+      } else {
+        setState("error");
+        closeResolve();
+      }
       record({
         direction: "status",
         event: "status",
@@ -437,11 +446,10 @@ export function createGrpcManualSession(
         metadata: status.metadata?.getMap?.() ?? undefined,
         at: Date.now(),
       });
-
-      markClosed();
     });
 
     call.on("error", (error: any) => {
+      setState("error");
       record({
         direction: "status",
         event: "error",
@@ -454,20 +462,18 @@ export function createGrpcManualSession(
         at: Date.now(),
       });
 
-      setState("error");
       closeResolve();
     });
 
     call.on("end", () => {
+      if (kind === "server_streaming" || kind === "bidi_streaming") {
+        markClosed();
+      }
       record({
         direction: "meta",
         event: "end",
         at: Date.now(),
       });
-
-      if (kind === "server_streaming" || kind === "bidi_streaming") {
-        markClosed();
-      }
     });
   }
 
@@ -513,6 +519,8 @@ export function createGrpcManualSession(
             payload: response,
             at: Date.now(),
           });
+
+          markClosed();
         },
       );
 
@@ -683,6 +691,12 @@ export function createGrpcManualSession(
                 payload: response,
                 at: Date.now(),
               });
+
+              // Unary success: close the session explicitly. The shared
+              // status listener also calls markClosed(), but doing it here
+              // guarantees the state transitions even if grpc-js reorders
+              // the callback and the status event on a fast local server.
+              markClosed();
 
               resolve();
             },

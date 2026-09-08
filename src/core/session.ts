@@ -88,7 +88,15 @@ export abstract class UnifiedSession {
     if (this.maxEvents > 0 && this.events.length > this.maxEvents) {
       this.events.splice(0, this.events.length - this.maxEvents);
     }
-    for (const listener of this.listeners) listener(dto);
+    for (const listener of this.listeners) {
+      // A throwing listener must not prevent other listeners from receiving
+      // the event or corrupt the emitter's own state.
+      try {
+        listener(dto);
+      } catch {
+        /* Observer errors are swallowed; they are not the library's concern. */
+      }
+    }
   }
 
   onEvent(listener: (event: SessionEventDTO) => void): SessionSubscription {
