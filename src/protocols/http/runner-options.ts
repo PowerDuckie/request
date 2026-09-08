@@ -170,6 +170,10 @@ export function buildRunOptions(
     // on; override to "auto" for an HTTP/2-only endpoint.
     protocolVersion: "http1",
     maxInvokableNestedRequests: 5,
+    // Null encoding forces postman-request to emit raw Buffer chunks on the
+    // `data` event. The default (utf8) may buffer the body to decode multi-byte
+    // boundaries, which defeats incremental SSE / ndjson streaming.
+    encoding: null,
   };
 
   const defaults: RuntimeRunOptions = {
