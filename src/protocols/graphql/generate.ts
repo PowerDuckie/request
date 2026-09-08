@@ -3,18 +3,8 @@ import type {
   GraphQLNamedType,
   GraphQLTypeRef,
   IntrospectedSchema,
-} from "./introspection";
-
-export interface GeneratedOperation {
-  operationType: "query" | "mutation" | "subscription";
-  fieldName: string;
-  operationName: string;
-  /** Complete, ready-to-send document. */
-  query: string;
-  /** JSON Schema describing the `variables` object, for sampling and for documentation. */
-  variablesSchema: { type: "object"; properties: Record<string, any>; required: string[] };
-  notes: string[];
-}
+  GeneratedOperation,
+} from "../../core/types";
 
 /** Unwrap NON_NULL / LIST wrappers down to the named type at the core. */
 function unwrap(ref: GraphQLTypeRef): {

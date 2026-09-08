@@ -1,26 +1,7 @@
-import { L as LocatedOperation, a as SendOptions, b as ExecuteContext, E as ExecResult, P as ProtocolAdapter, A as AdapterContext } from '../../protocol-BBjdeNfE.js';
+import { L as LocatedOperation, E as ExecuteContext, P as ProtocolAdapter, A as AdapterContext } from '../../protocol-D7sEx8IP.js';
+import { a as SendOptions, al as ResolvedWsConfig, E as ExecResult, k as CreateWsManualSessionOptions, aC as WsManualSession } from '../../types-C9ifzKqk.js';
+export { az as WebSocketSessionEvent, aA as WebSocketSessionState, aD as WsSendOptions } from '../../types-C9ifzKqk.js';
 
-interface ResolvedWsConfig {
-    url: string;
-    subprotocols: string[];
-    headers: Record<string, string>;
-    send: Array<string | Uint8Array>;
-    sendDelayMs: number;
-    maxMessages: number;
-    maxSessionMs: number;
-    idleTimeoutMs: number;
-    keepAlive?: {
-        intervalMs: number;
-        payload: string;
-    };
-    closeCode: number;
-    closeReason: string;
-    /** Grace period for the peer's close frame before the socket is destroyed. */
-    closeTimeoutMs: number;
-    rejectUnauthorized: boolean;
-    maxPayloadBytes: number;
-    clientOptions: Record<string, unknown>;
-}
 /**
  * Resolve the effective WebSocket configuration.
  *
@@ -38,50 +19,6 @@ declare function resolveWsConfig(located: LocatedOperation, spec: any, options: 
  */
 declare function runWebSocket(config: ResolvedWsConfig, options: SendOptions, ctx?: ExecuteContext): Promise<ExecResult>;
 
-type WebSocketSessionState = "idle" | "connecting" | "open" | "closing" | "closed" | "error";
-interface WebSocketSessionEvent {
-    direction: "in" | "out" | "meta";
-    receivedAt: number;
-    event: "open" | "text" | "binary" | "error" | "close" | "upgrade" | "unexpected-response";
-    data?: string;
-    parsed?: unknown;
-    code?: number;
-    reason?: string;
-    protocol?: string;
-    extensions?: string;
-    wasClean?: boolean;
-    statusCode?: number;
-    statusMessage?: string;
-    headers?: Record<string, string | string[] | undefined>;
-    error?: string;
-}
-interface CreateWsManualSessionOptions {
-    url: string;
-    headers?: Record<string, string>;
-    subprotocols?: string[];
-    rejectUnauthorized?: boolean;
-    /** Abort opening / pending operations from the outside. */
-    signal?: AbortSignal;
-    /** Handshake timeout in ms. Default 15_000. */
-    openTimeoutMs?: number;
-    /** Ring-buffer cap for events. 0 = unbounded. Default 1000. */
-    maxEvents?: number;
-}
-interface WsSendOptions {
-    delayMs?: number;
-    binary?: boolean;
-}
-interface WsManualSession {
-    readonly state: WebSocketSessionState;
-    readonly events: readonly WebSocketSessionEvent[];
-    open(): Promise<void>;
-    send(data: unknown, options?: WsSendOptions): Promise<void>;
-    close(options?: {
-        code?: number;
-        reason?: string;
-    }): Promise<void>;
-    waitForClose(): Promise<void>;
-}
 declare function createWsManualSession(options: CreateWsManualSessionOptions): WsManualSession;
 
 interface WsPlan {
@@ -95,4 +32,4 @@ declare class WebSocketAdapter implements ProtocolAdapter<WsPlan> {
     execute(plan: WsPlan, options: SendOptions, ctx?: ExecuteContext): Promise<ExecResult>;
 }
 
-export { type CreateWsManualSessionOptions, type ResolvedWsConfig, WebSocketAdapter, type WebSocketSessionEvent, type WebSocketSessionState, type WsManualSession, type WsPlan, type WsSendOptions, createWsManualSession, resolveWsConfig, runWebSocket, createWsManualSession as runWebSocketSession, createWsManualSession as wsManualSession };
+export { CreateWsManualSessionOptions, ResolvedWsConfig, WebSocketAdapter, WsManualSession, type WsPlan, createWsManualSession, resolveWsConfig, runWebSocket, createWsManualSession as runWebSocketSession, createWsManualSession as wsManualSession };

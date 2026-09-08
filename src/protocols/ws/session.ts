@@ -1,85 +1,17 @@
-import WebSocket, { type ClientOptions, type Data, type RawData } from "ws";
-
-export type WebSocketSessionState =
-  | "idle"
-  | "connecting"
-  | "open"
-  | "closing"
-  | "closed"
-  | "error";
-
-export interface WebSocketSessionEvent {
-  direction: "in" | "out" | "meta";
-  receivedAt: number;
-  event:
-    | "open"
-    | "text"
-    | "binary"
-    | "error"
-    | "close"
-    | "upgrade"
-    | "unexpected-response";
-  data?: string;
-  parsed?: unknown;
-  code?: number;
-  reason?: string;
-  protocol?: string;
-  extensions?: string;
-  wasClean?: boolean;
-  statusCode?: number;
-  statusMessage?: string;
-  headers?: Record<string, string | string[] | undefined>;
-  error?: string;
-}
-
-export interface CreateWsManualSessionOptions {
-  url: string;
-  headers?: Record<string, string>;
-  subprotocols?: string[];
-  rejectUnauthorized?: boolean;
-  /** Abort opening / pending operations from the outside. */
-  signal?: AbortSignal;
-  /** Handshake timeout in ms. Default 15_000. */
-  openTimeoutMs?: number;
-  /** Ring-buffer cap for events. 0 = unbounded. Default 1000. */
-  maxEvents?: number;
-}
-
-export interface WsSendOptions {
-  delayMs?: number;
-  binary?: boolean;
-}
-
-export interface WsManualSession {
-  readonly state: WebSocketSessionState;
-  readonly events: readonly WebSocketSessionEvent[];
-
-  open(): Promise<void>;
-
-  send(data: unknown, options?: WsSendOptions): Promise<void>;
-
-  close(options?: { code?: number; reason?: string }): Promise<void>;
-
-  waitForClose(): Promise<void>;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function tryParseJson(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return undefined;
-  }
-}
+import WebSocket, {
+  type ClientOptions,
+  type Data,
+  type RawData,
+} from "ws";
+import type {
+  CreateWsManualSessionOptions,
+  WebSocketSessionEvent,
+  WsManualSession,
+  WsSendOptions,
+} from "../../core/types";
+import type { SessionEventDTO, SessionSubscription } from "../../core/session";
+import { createEventHub } from "../../core/session";
+import { messageOf, sleep, tryParseJson } from "../../core/utils";
 
 function normalizeBinaryData(data: unknown): Buffer {
   if (Buffer.isBuffer(data)) {
@@ -106,12 +38,20 @@ function normalizeBinaryData(data: unknown): Buffer {
 export function createWsManualSession(
   options: CreateWsManualSessionOptions,
 ): WsManualSession {
-  let state: WebSocketSessionState = "idle";
-  const events: WebSocketSessionEvent[] = [];
-  const maxEvents =
+  let state: WsManualSession["state"] = "idle";
+
+  function setState(next: WsManualSession["state"]): void {
+    state = next;
+    hub.setState(next);
+  }
+  const hub = createEventHub(
+    "websocket",
+    "websocket",
+    `ws_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
     typeof options.maxEvents === "number" && options.maxEvents >= 0
       ? Math.floor(options.maxEvents)
-      : 1000;
+      : 1000,
+  );
   const openTimeoutMs =
     typeof options.openTimeoutMs === "number" && options.openTimeoutMs > 0
       ? Math.floor(options.openTimeoutMs)
@@ -133,10 +73,43 @@ export function createWsManualSession(
   }
 
   function record(event: WebSocketSessionEvent): void {
-    events.push(event);
-    if (maxEvents > 0 && events.length > maxEvents) {
-      events.splice(0, events.length - maxEvents);
-    }
+    const {
+      direction,
+      receivedAt,
+      event: kind,
+      data,
+      parsed,
+      code,
+      reason,
+      wasClean,
+      protocol,
+      extensions,
+      statusCode,
+      statusMessage,
+      headers,
+      error,
+    } = event as any;
+
+    const meta: Record<string, unknown> = {};
+    if (parsed !== undefined) meta.parsed = parsed;
+    if (code !== undefined) meta.code = code;
+    if (reason !== undefined) meta.reason = reason;
+    if (wasClean !== undefined) meta.wasClean = wasClean;
+    if (protocol !== undefined) meta.protocol = protocol;
+    if (extensions !== undefined) meta.extensions = extensions;
+    if (statusCode !== undefined) meta.statusCode = statusCode;
+    if (statusMessage !== undefined) meta.statusMessage = statusMessage;
+    if (headers !== undefined) meta.headers = headers;
+
+    hub.emit({
+      direction,
+      kind,
+      at: receivedAt,
+      state: hub.state,
+      data,
+      meta: Object.keys(meta).length ? meta : undefined,
+      error,
+    });
   }
 
   function assertSocketOpen(): WebSocket {
@@ -148,7 +121,7 @@ export function createWsManualSession(
   }
 
   function recordError(error: unknown): void {
-    const message = errorMessage(error);
+    const message = messageOf(error);
 
     record({
       direction: "meta",
@@ -160,12 +133,22 @@ export function createWsManualSession(
   }
 
   return {
-    get state(): WebSocketSessionState {
+    get protocol(): "websocket" {
+      return "websocket";
+    },
+
+    get state(): WsManualSession["state"] {
       return state;
     },
 
-    get events(): readonly WebSocketSessionEvent[] {
-      return events;
+    get events(): readonly SessionEventDTO[] {
+      return hub.events;
+    },
+
+    onEvent(
+      listener: (event: SessionEventDTO) => void,
+    ): SessionSubscription {
+      return hub.onEvent(listener);
     },
 
     async open(): Promise<void> {
@@ -174,7 +157,7 @@ export function createWsManualSession(
       }
 
       if (options.signal?.aborted) {
-        state = "closed";
+        setState("closed");
         throw new Error("WebSocket open aborted");
       }
 
@@ -183,7 +166,7 @@ export function createWsManualSession(
       }
 
       resetClosePromise();
-      state = "connecting";
+      setState("connecting");
 
       await new Promise<void>((resolve, reject) => {
         const clientOptions: ClientOptions = {
@@ -241,7 +224,7 @@ export function createWsManualSession(
           const error = new Error(
             `WebSocket handshake timed out after ${openTimeoutMs}ms`,
           );
-          state = "error";
+          setState("error");
           recordError(error);
           rejectOpen(error);
           try {
@@ -258,7 +241,7 @@ export function createWsManualSession(
         if (options.signal) {
           const onAbort = () => {
             const error = new Error("WebSocket open aborted");
-            state = "closed";
+            setState("closed");
             recordError(error);
             rejectOpen(error);
             try {
@@ -315,7 +298,7 @@ export function createWsManualSession(
             `WebSocket handshake failed${statusText ? `: ${statusText}` : ""}`,
           );
 
-          state = "error";
+          setState("error");
           recordError(error);
           rejectOpen(error);
 
@@ -328,7 +311,7 @@ export function createWsManualSession(
         });
 
         ws.once("open", () => {
-          state = "open";
+          setState("open");
 
           record({
             direction: "meta",
@@ -381,7 +364,7 @@ export function createWsManualSession(
         });
 
         ws.on("error", (error) => {
-          state = "error";
+          setState("error");
           recordError(error);
           rejectOpen(error);
         });
@@ -390,7 +373,7 @@ export function createWsManualSession(
           const reason = reasonBuffer.toString("utf8");
           const wasClean = code === 1000;
 
-          state = "closed";
+          setState("closed");
 
           record({
             direction: "meta",
@@ -424,7 +407,7 @@ export function createWsManualSession(
       const ws = assertSocketOpen();
 
       if (sendOptions.delayMs !== undefined && sendOptions.delayMs > 0) {
-        await delay(sendOptions.delayMs);
+        await sleep(sendOptions.delayMs, options.signal);
       }
 
       if (options.signal?.aborted) {
@@ -501,7 +484,7 @@ export function createWsManualSession(
       } = {},
     ): Promise<void> {
       if (!socket) {
-        state = "closed";
+        setState("closed");
         closeResolve();
         return;
       }
@@ -512,13 +495,15 @@ export function createWsManualSession(
       }
 
       if (state === "closing") {
+        await closePromise;
         return;
       }
 
-      state = "closing";
+      setState("closing");
 
       if (socket.readyState === WebSocket.CONNECTING) {
         socket.terminate();
+        await closePromise;
         return;
       }
 
@@ -527,14 +512,16 @@ export function createWsManualSession(
           closeOptions.code ?? 1000,
           closeOptions.reason ?? "Closed",
         );
+        await closePromise;
         return;
       }
 
       if (socket.readyState === WebSocket.CLOSING) {
+        await closePromise;
         return;
       }
 
-      state = "closed";
+      setState("closed");
       closeResolve();
     },
 

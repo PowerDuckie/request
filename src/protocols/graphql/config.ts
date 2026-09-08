@@ -1,27 +1,11 @@
-import type { SendOptions, GraphQLOptions } from "../../core/types";
+import type { SendOptions, GraphQLOptions, ResolvedGraphQLConfig } from "../../core/types";
+export type { ResolvedGraphQLConfig } from "../../core/types";
 import type { LocatedOperation } from "../../openapi/locate";
 import { resolveServerUrl } from "../http/environment";
-import { interpolate, isPlainObject } from "../../core/utils";
+import { interpolate, isPlainObject, isSecretKey } from "../../core/utils";
 import { sampleFromSchema } from "../../openapi/sample";
 import { err } from "../../core/errors";
 
-export interface ResolvedGraphQLConfig {
-  endpoint: string;
-  query: string;
-  operationName?: string;
-  variables: Record<string, unknown>;
-  headers: Record<string, string>;
-  useGet: boolean;
-}
-
-/**
- * Same detection the HTTP environment builder uses, so exported environments
- * mask credential-shaped variables consistently across every adapter.
- */
-const SECRET_KEY_PATTERN =
-  /(token|secret|password|passwd|apikey|api_key|credential|private)/i;
-
-export { SECRET_KEY_PATTERN };
 
 /**
  * Resolve the effective GraphQL call.
@@ -155,3 +139,5 @@ function optionalText(value: unknown): string | undefined {
 function hasHeader(headers: Record<string, string>, name: string): boolean {
   return Object.keys(headers).some((key) => key.toLowerCase() === name);
 }
+
+export { isSecretKey as SECRET_KEY_PATTERN };

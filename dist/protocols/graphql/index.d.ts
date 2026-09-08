@@ -1,13 +1,7 @@
-import { L as LocatedOperation, a as SendOptions, b as ExecuteContext, E as ExecResult, P as ProtocolAdapter, A as AdapterContext } from '../../protocol-BBjdeNfE.js';
+import { L as LocatedOperation, E as ExecuteContext, P as ProtocolAdapter, A as AdapterContext } from '../../protocol-D7sEx8IP.js';
+import { a as SendOptions, aj as ResolvedGraphQLConfig, E as ExecResult, Y as IntrospectionResult, X as IntrospectedSchema, l as GeneratedOperation, m as GraphQLArg, q as GraphQLTypeRef, aB as WriteGraphQLOptions, D as DiscoverAndWriteResult } from '../../types-C9ifzKqk.js';
+export { n as GraphQLFieldInfo, o as GraphQLNamedType } from '../../types-C9ifzKqk.js';
 
-interface ResolvedGraphQLConfig {
-    endpoint: string;
-    query: string;
-    operationName?: string;
-    variables: Record<string, unknown>;
-    headers: Record<string, string>;
-    useGet: boolean;
-}
 /**
  * Resolve the effective GraphQL call.
  *
@@ -32,46 +26,6 @@ declare function runGraphQL(config: ResolvedGraphQLConfig, options: SendOptions,
 
 /** Standard GraphQL introspection query (spec-October2021), trimmed of directive locations we don't use. */
 declare const INTROSPECTION_QUERY: string;
-interface GraphQLTypeRef {
-    kind: string;
-    name?: string | null;
-    ofType?: GraphQLTypeRef | null;
-}
-interface GraphQLArg {
-    name: string;
-    description?: string | null;
-    type: GraphQLTypeRef;
-    defaultValue?: string | null;
-}
-interface GraphQLFieldInfo {
-    name: string;
-    description?: string | null;
-    args: GraphQLArg[];
-    type: GraphQLTypeRef;
-    isDeprecated?: boolean;
-}
-interface GraphQLNamedType {
-    kind: string;
-    name: string;
-    description?: string | null;
-    fields?: GraphQLFieldInfo[];
-    inputFields?: GraphQLArg[];
-    enumValues?: Array<{
-        name: string;
-    }>;
-}
-interface IntrospectedSchema {
-    queryType?: string;
-    mutationType?: string;
-    subscriptionType?: string;
-    /** Every named type, keyed by name, for resolving arg/field types during generation. */
-    types: Map<string, GraphQLNamedType>;
-}
-interface IntrospectionResult {
-    schema: IntrospectedSchema;
-    /** Raw `__schema` payload, kept for callers that want more than this module parses. */
-    raw: any;
-}
 /**
  * Auto-fetch a GraphQL server's schema via the standard introspection query.
  * This is the GraphQL analogue of the gRPC reflection handshake: one round
@@ -82,20 +36,6 @@ declare function introspectSchema(endpoint: string, init?: {
     signal?: AbortSignal;
 }): Promise<IntrospectionResult>;
 
-interface GeneratedOperation {
-    operationType: "query" | "mutation" | "subscription";
-    fieldName: string;
-    operationName: string;
-    /** Complete, ready-to-send document. */
-    query: string;
-    /** JSON Schema describing the `variables` object, for sampling and for documentation. */
-    variablesSchema: {
-        type: "object";
-        properties: Record<string, any>;
-        required: string[];
-    };
-    notes: string[];
-}
 /**
  * Generate a complete, runnable operation document plus a variables schema
  * for one root field (a query, mutation or subscription).
@@ -112,13 +52,6 @@ declare function generateOperation(operationType: "query" | "mutation" | "subscr
 /** Enumerate every generatable operation across Query/Mutation/Subscription. */
 declare function generateAllOperations(schema: IntrospectedSchema): GeneratedOperation[];
 
-interface WriteGraphQLOptions {
-    /** Overwrite an existing path for the same operation. Defaults to true. */
-    overwrite?: boolean;
-    /** Extra headers to send with the introspection request (auth, etc.). */
-    headers?: Record<string, string>;
-    signal?: AbortSignal;
-}
 /**
  * "Upload" step: merge generated GraphQL operations into `spec.paths` as
  * synthetic POST operations carrying an `x-graphql` extension. Each becomes
@@ -127,11 +60,6 @@ interface WriteGraphQLOptions {
  * to the GraphQL adapter afterward.
  */
 declare function writeGraphQLOperations(spec: any, endpoint: string, operations: GeneratedOperation[], options?: WriteGraphQLOptions): any;
-interface DiscoverAndWriteResult {
-    spec: any;
-    operations: GeneratedOperation[];
-    warnings: string[];
-}
 /**
  * One-shot "auto-fetch query + upload": introspect the live schema, generate
  * a runnable document for every query/mutation/subscription field, and merge
@@ -164,4 +92,4 @@ declare class GraphQLAdapter implements ProtocolAdapter<GraphQLPlan> {
     execute(plan: GraphQLPlan, options: SendOptions, ctx?: ExecuteContext): Promise<ExecResult>;
 }
 
-export { type DiscoverAndWriteResult, type GeneratedOperation, GraphQLAdapter, type GraphQLArg, type GraphQLFieldInfo, type GraphQLNamedType, type GraphQLPlan, type GraphQLTypeRef, INTROSPECTION_QUERY, type IntrospectedSchema, type IntrospectionResult, type WriteGraphQLOptions, discoverAndWriteGraphQLSchema, generateAllOperations, generateOperation, introspectSchema, resolveGraphQLConfig, runGraphQL, writeGraphQLOperations };
+export { DiscoverAndWriteResult, GeneratedOperation, GraphQLAdapter, GraphQLArg, type GraphQLPlan, GraphQLTypeRef, INTROSPECTION_QUERY, IntrospectedSchema, IntrospectionResult, WriteGraphQLOptions, discoverAndWriteGraphQLSchema, generateAllOperations, generateOperation, introspectSchema, resolveGraphQLConfig, runGraphQL, writeGraphQLOperations };

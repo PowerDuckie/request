@@ -1,36 +1,17 @@
-import type { SendOptions, McpOptions } from "../../core/types";
+import type {
+  McpTransport,
+  SendOptions,
+  McpOptions,
+  ResolvedMcpConfig,
+} from "../../core/types";
+export type { ResolvedMcpConfig } from "../../core/types";
 import type { LocatedOperation } from "../../openapi/locate";
 import { resolveServerUrl } from "../http/environment";
-import { interpolate, isPlainObject } from "../../core/utils";
+import { interpolate, isPlainObject, isSecretKey } from "../../core/utils";
+export { isSecretKey as SECRET_KEY_PATTERN };
 import { sampleFromSchema } from "../../openapi/sample";
 import { err } from "../../core/errors";
 
-export type McpTransport = "streamable-http" | "stdio";
-
-export interface ResolvedMcpConfig {
-  transport: McpTransport;
-  endpoint?: string;
-  command?: string;
-  args?: string[];
-  cwd?: string;
-  env?: Record<string, string | undefined>;
-  timeoutMs?: number;
-  maxBufferBytes?: number;
-  maxStderrBytes?: number;
-  method: string;
-  /** Fully-formed JSON-RPC `params` for `method`. */
-  params: Record<string, unknown>;
-  headers: Record<string, string>;
-  sessionId?: string;
-  /** Only set when the caller actually negotiated it; never guessed. */
-  protocolVersion?: string;
-  clientInfo: { name: string; version: string };
-}
-
-const SECRET_KEY_PATTERN =
-  /(token|secret|password|passwd|apikey|api_key|credential|private)/i;
-
-export { SECRET_KEY_PATTERN };
 
 const KNOWN_METHODS = new Set([
   "tools/call",

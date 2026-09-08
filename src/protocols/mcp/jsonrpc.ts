@@ -1,5 +1,6 @@
 import { SseParser } from "../http/sse-parser";
 import { err, toErrorInfo } from "../../core/errors";
+import { isPlainObject } from "../../core/utils";
 
 export interface JsonRpcRequest {
   jsonrpc: "2.0";
@@ -230,8 +231,5 @@ export function isJsonRpcError(message: any): message is { error: { code: number
   return !!message && typeof message === "object" && isPlainObject(message.error);
 }
 
-function isPlainObject(value: unknown): value is Record<string, any> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 export { toErrorInfo };

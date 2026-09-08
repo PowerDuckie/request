@@ -1,10 +1,6 @@
 import type { SendOptions } from "../../core/types";
 import { err } from "../../core/errors";
-import { isPlainObject } from "../../core/utils";
-
-/** Variable names whose value should be masked in an exported environment. */
-const SECRET_KEY_PATTERN =
-  /(token|secret|password|passwd|apikey|api_key|credential|private|authorization)/i;
+import { isPlainObject, isSecretKey } from "../../core/utils";
 
 /** Placeholder for a `{{name}}` sequence while single-brace cleanup runs. */
 const GUARD_OPEN = "\u0000PK_OPEN\u0000";
@@ -204,7 +200,7 @@ export function buildEnvironment(
     push(
       key,
       value,
-      maskSecrets && SECRET_KEY_PATTERN.test(key) ? "secret" : "default",
+      maskSecrets && isSecretKey(key) ? "secret" : "default",
     );
   }
 

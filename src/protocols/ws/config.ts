@@ -1,27 +1,10 @@
-import type { SendOptions, WebSocketOptions } from "../../core/types";
+import type { SendOptions, WebSocketOptions, ResolvedWsConfig } from "../../core/types";
+export type { ResolvedWsConfig } from "../../core/types";
 import type { LocatedOperation } from "../../openapi/locate";
 import { resolveServerUrl } from "../http/environment";
 import { interpolate } from "../../core/utils";
 import { err } from "../../core/errors";
 
-export interface ResolvedWsConfig {
-  url: string;
-  subprotocols: string[];
-  headers: Record<string, string>;
-  send: Array<string | Uint8Array>;
-  sendDelayMs: number;
-  maxMessages: number;
-  maxSessionMs: number;
-  idleTimeoutMs: number;
-  keepAlive?: { intervalMs: number; payload: string };
-  closeCode: number;
-  closeReason: string;
-  /** Grace period for the peer's close frame before the socket is destroyed. */
-  closeTimeoutMs: number;
-  rejectUnauthorized: boolean;
-  maxPayloadBytes: number;
-  clientOptions: Record<string, unknown>;
-}
 
 /** Convert an http(s) origin into its ws(s) equivalent. */
 function toWsScheme(url: string): string {

@@ -1,116 +1,35 @@
-import { initializeSession, MCP_PROTOCOL_VERSION } from "./discovery.js";
-import { sendJsonRpc, nextRequestId, isJsonRpcError } from "./jsonrpc.js";
-import type { JsonRpcOutcome } from "./jsonrpc.js";
-import { err, toErrorInfo } from "../../core/errors.js";
-
-/* ------------------------------------------------------------------ *
- * Types
- * ------------------------------------------------------------------ */
-
-export type McpSessionState =
-  | "idle"
-  | "opening"
-  | "open"
-  | "closing"
-  | "closed";
-
-export interface McpSessionEvent {
-  direction: "in" | "out" | "meta";
-  at: number;
-  event: "session" | "jsonrpc" | "notification" | "error" | "lifecycle";
-  /** JSON text of `parsed`, or undefined when there was no body (202/204). */
-  data?: string;
-  parsed?: unknown;
-}
-
-export interface McpManualSessionOptions {
-  endpoint: string;
-  headers?: Record<string, string>;
-  clientInfo?: { name: string; version: string };
-  /** Client capabilities advertised at initialize. Default: {}. */
-  capabilities?: Record<string, unknown>;
-  /** Per-request timeout in ms. 0/undefined disables. Default 30_000. */
-  timeoutMs?: number;
-  /** Aborts the whole session (open, in-flight sends, close). */
-  signal?: AbortSignal;
-  /** Ring-buffer cap for `events`. Default 1000. 0 = unbounded. */
-  maxEvents?: number;
-  /** Redact secret-looking values in recorded events. Default true. */
-  redactSecrets?: boolean;
-  /**
-   * Issue list calls one at a time. Needed only for servers that cannot
-   * handle concurrent requests on one session. Default false.
-   */
-  serialize?: boolean;
-}
-
-export interface McpRequestOptions {
-  delayMs?: number;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-  /** Return the raw outcome instead of throwing on JSON-RPC errors. */
-  raw?: boolean;
-}
-
-export interface McpListing<T> {
-  items: T[];
-  pages: number;
-}
-
-/** How a session-termination DELETE was answered. */
-export type McpTerminateOutcome =
-  | "released"
-  | "unsupported"
-  | "already-gone"
-  | "failed";
-
-export interface McpManualSession {
-  readonly state: McpSessionState;
-  readonly sessionId: string | undefined;
-  readonly protocolVersion: string | undefined;
-  readonly serverInfo: { name: string; version: string } | undefined;
-  readonly events: readonly McpSessionEvent[];
-
-  open(): Promise<void>;
-  request<T = any>(
-    method: string,
-    params?: unknown,
-    options?: McpRequestOptions,
-  ): Promise<T>;
-  send(message: unknown, options?: McpRequestOptions): Promise<JsonRpcOutcome>;
-  notify(
-    method: string,
-    params?: unknown,
-    options?: McpRequestOptions,
-  ): Promise<void>;
-  ping(options?: McpRequestOptions): Promise<void>;
-
-  listTools(options?: McpRequestOptions): Promise<McpListing<any>>;
-  listPrompts(options?: McpRequestOptions): Promise<McpListing<any>>;
-  listResources(options?: McpRequestOptions): Promise<McpListing<any>>;
-  listResourceTemplates(options?: McpRequestOptions): Promise<McpListing<any>>;
-  /** Concrete resources + templates, merged. */
-  listSources(options?: McpRequestOptions): Promise<McpListing<any>>;
-
-  callTool(
-    name: string,
-    args?: Record<string, unknown>,
-    options?: McpRequestOptions,
-  ): Promise<any>;
-  getPrompt(
-    name: string,
-    args?: Record<string, unknown>,
-    options?: McpRequestOptions,
-  ): Promise<any>;
-  readResource(uri: string, options?: McpRequestOptions): Promise<any>;
-
-  close(): Promise<void>;
-  waitForClose(): Promise<void>;
-  [Symbol.asyncDispose]?: () => Promise<void>;
-}
-
-const SECRET_KEY_PATTERN =
-  /(token|secret|password|passwd|apikey|api_key|credential|private|authorization)/i;
+/**
+ * Long-lived, stateful MCP manual sessions.
+ *
+ * One session core drives both supported transports (Streamable HTTP and
+ * stdio) through the `McpTransport` adapter in "./transport". The session
+ * mirrors `createWsManualSession` / `createGrpcManualSession`: open, drive
+ * list/call methods by hand, then close.
+ */
+import type {
+  JsonRpcOutcome,
+  McpListing,
+  McpManualSession,
+  McpManualSessionOptions,
+  McpRequestOptions,
+  McpSessionEvent,
+  McpSessionState,
+  McpStdioSessionOptions,
+  McpTerminateOutcome,
+} from "../../core/types";
+import { isPlainObject, isSecretKey, safeStringify } from "../../core/utils";
+import type {
+  SessionEventDTO,
+  SessionSubscription,
+} from "../../core/session";
+import { createEventHub } from "../../core/session";
+import { err, toErrorInfo } from "../../core/errors";
+import { isJsonRpcError, nextRequestId } from "./jsonrpc";
+import {
+  createHttpMcpTransport,
+  createStdioMcpTransport,
+  type McpTransport,
+} from "./transport";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_EVENTS = 1000;
@@ -135,10 +54,6 @@ type ListMethod = keyof typeof LIST_RESULT_KEY;
  * Helpers
  * ------------------------------------------------------------------ */
 
-function isPlainObject(v: unknown): v is Record<string, any> {
-  return !!v && typeof v === "object" && !Array.isArray(v);
-}
-
 /** Depth-limited, cycle-safe redaction so events never leak credentials. */
 function redact(
   value: unknown,
@@ -155,20 +70,9 @@ function redact(
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
     out[k] =
-      SECRET_KEY_PATTERN.test(k) && v != null
-        ? "[redacted]"
-        : redact(v, depth + 1, seen);
+      isSecretKey(k) && v != null ? "[redacted]" : redact(v, depth + 1, seen);
   }
   return out;
-}
-
-function safeStringify(value: unknown): string | undefined {
-  if (value === undefined) return undefined;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return "[unserializable]";
-  }
 }
 
 /**
@@ -248,50 +152,87 @@ function classifyTerminate(status: number): McpTerminateOutcome {
 }
 
 /* ------------------------------------------------------------------ *
- * Session
+ * Transport resolution
  * ------------------------------------------------------------------ */
 
-/**
- * Long-lived, stateful MCP session over Streamable HTTP.
- *
- * Unlike `runMcp()` — which is one self-contained sample with its own
- * handshake — this keeps a single negotiated session open so a caller can
- * drive `initialize -> list -> call -> DELETE` by hand, mirroring
- * `createWsManualSession` and `createGrpcManualSession`.
- */
-export function createMcpManualSession(
-  options: McpManualSessionOptions,
-): McpManualSession {
-  if (!options || typeof options.endpoint !== "string" || !options.endpoint) {
-    throw err(
-      "BAD_MCP_ENDPOINT",
-      "createMcpManualSession requires an `endpoint`.",
-    );
-  }
+function validateHttpEndpoint(endpoint: string): string {
   try {
-    const parsed = new URL(options.endpoint);
+    const parsed = new URL(endpoint);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       throw new Error("not http(s)");
     }
+    return endpoint;
   } catch {
     throw err(
       "BAD_MCP_ENDPOINT",
-      `MCP endpoint must be an absolute http(s) URL, received: ${options.endpoint}`,
+      `MCP endpoint must be an absolute http(s) URL, received: ${endpoint}`,
     );
   }
+}
 
-  const endpoint = options.endpoint;
-  const baseHeaders = { ...(options.headers ?? {}) };
+function resolveTransport(options: McpManualSessionOptions): McpTransport {
+  const transport = options.transport ?? "streamable-http";
+
+  if (transport === "stdio") {
+    if (!options.command || !String(options.command).trim()) {
+      throw err(
+        "BAD_MCP_STDIO_COMMAND",
+        "MCP stdio sessions require a non-empty `command`.",
+      );
+    }
+    return createStdioMcpTransport({
+      command: options.command,
+      args: options.args,
+      cwd: options.cwd,
+      env: options.env,
+      timeoutMs: options.timeoutMs,
+      maxBufferBytes: options.maxBufferBytes,
+    });
+  }
+
+  if (!options.endpoint) {
+    throw err(
+      "BAD_MCP_ENDPOINT",
+      "MCP http sessions require an `endpoint` (or set transport: \"stdio\" with a `command`).",
+    );
+  }
+  return createHttpMcpTransport({
+    endpoint: validateHttpEndpoint(options.endpoint),
+    headers: options.headers,
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Session core
+ * ------------------------------------------------------------------ */
+
+/**
+ * Build a manual session over any transport. All state, event recording,
+ * pagination and close orchestration live here; only the wire differs.
+ */
+export function createMcpSessionCore(
+  transport: McpTransport,
+  options: McpManualSessionOptions,
+): McpManualSession {
   const defaultTimeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxEvents = options.maxEvents ?? DEFAULT_MAX_EVENTS;
   const shouldRedact = options.redactSecrets !== false;
   const serialize = options.serialize === true;
 
-  const events: McpSessionEvent[] = [];
+  const hub = createEventHub(
+    "mcp",
+    options.transport ?? "http",
+    `mcp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
+    options.maxEvents ?? DEFAULT_MAX_EVENTS,
+  );
 
   let state: McpSessionState = "idle";
   /** Read through a call so TS never narrows the mutable closure variable. */
   const getState = (): McpSessionState => state;
+  const setState = (next: McpSessionState): void => {
+    state = next;
+    hub.setState(next);
+  };
 
   let sessionId: string | undefined;
   let protocolVersion: string | undefined;
@@ -310,15 +251,19 @@ export function createMcpManualSession(
 
   function record(event: McpSessionEvent): void {
     const payload = shouldRedact ? redact(event.parsed) : event.parsed;
-    events.push({ ...event, parsed: payload, data: safeStringify(payload) });
-    if (maxEvents > 0 && events.length > maxEvents) {
-      events.splice(0, events.length - maxEvents);
-    }
+    hub.emit({
+      direction: event.direction,
+      kind: event.event,
+      at: event.at,
+      state: getState(),
+      data: event.data,
+      meta: payload !== undefined ? { parsed: payload } : undefined,
+    });
   }
 
   function headersForCall(): Record<string, string> {
     return {
-      ...baseHeaders,
+      ...(options.headers ?? {}),
       ...(sessionId ? { "Mcp-Session-Id": sessionId } : {}),
     };
   }
@@ -326,7 +271,7 @@ export function createMcpManualSession(
   function assertOpen(what: string): void {
     const current = getState();
     if (current === "open") return;
-    if (current === "idle" || current === "opening") {
+    if (current === "idle" || current === "connecting") {
       throw err(
         "MCP_NOT_OPEN",
         `Call open() before ${what}; session is "${current}".`,
@@ -351,7 +296,7 @@ export function createMcpManualSession(
   async function open(): Promise<void> {
     const current = getState();
     if (current === "open") return;
-    if (current === "opening") return openPromise!;
+    if (current === "connecting") return openPromise!;
     if (current === "closing" || current === "closed") {
       throw err(
         "MCP_SESSION_CLOSED",
@@ -359,22 +304,22 @@ export function createMcpManualSession(
       );
     }
 
-    state = "opening";
+    setState("connecting");
     const link = linkSignals(defaultTimeoutMs, options.signal);
 
     openPromise = (async () => {
       try {
-        const session = await initializeSession(endpoint, {
-          headers: baseHeaders,
-          signal: link.signal,
+        const session = await transport.open({
           clientInfo: options.clientInfo,
           capabilities: options.capabilities,
+          signal: link.signal,
         });
 
         sessionId = session.sessionId;
-        protocolVersion = session.protocolVersion ?? MCP_PROTOCOL_VERSION;
+        protocolVersion =
+          session.protocolVersion ?? protocolVersion ?? undefined;
         serverInfo = session.serverInfo;
-        state = "open";
+        setState("open");
 
         record({
           direction: "in",
@@ -383,7 +328,7 @@ export function createMcpManualSession(
           parsed: { sessionId, protocolVersion, serverInfo },
         });
       } catch (e) {
-        state = "closed";
+        setState("closed");
         resolveClosed();
         const info = toErrorInfo(e);
         record({
@@ -423,12 +368,19 @@ export function createMcpManualSession(
 
       record({ direction: "out", at: Date.now(), event: kind, parsed: body });
 
-      const outcome = await sendJsonRpc(endpoint, body as any, {
-        headers: headersForCall(),
+      const init = {
         signal: link.signal,
+        timeoutMs,
         startedAt: Date.now(),
         protocolVersion,
-      });
+        sessionId,
+        headers: headersForCall(),
+      };
+
+      const outcome =
+        kind === "notification"
+          ? await transport.notify(body, init)
+          : await transport.call(body, init);
 
       // A server may rotate/assign the session id mid-flight.
       if (outcome.sessionId && outcome.sessionId !== sessionId) {
@@ -455,7 +407,7 @@ export function createMcpManualSession(
 
       // 404 means the server dropped our session; nothing can be reused.
       if (outcome.status === 404 && sessionId) {
-        state = "closed";
+        setState("closed");
         resolveClosed();
         throw err(
           "MCP_SESSION_EXPIRED",
@@ -620,17 +572,18 @@ export function createMcpManualSession(
     if (getState() === "closed") return;
     if (getState() === "closing") return closePromise!;
     if (getState() === "idle") {
-      state = "closed";
+      setState("closed");
       resolveClosed();
+      await transport.dispose();
       return;
     }
-    if (getState() === "opening") {
+    if (getState() === "connecting") {
       await openPromise?.catch(() => undefined);
       // open() may have failed and already closed us.
       if (getState() === "closed") return;
     }
 
-    state = "closing";
+    setState("closing");
     closePromise = (async () => {
       // Let outstanding requests settle before tearing the session down.
       await Promise.allSettled([...inflight]);
@@ -638,24 +591,20 @@ export function createMcpManualSession(
       if (sessionId) {
         const link = linkSignals(defaultTimeoutMs);
         try {
-          const response = await fetch(endpoint, {
-            method: "DELETE",
-            headers: {
-              ...baseHeaders,
-              "Mcp-Session-Id": sessionId,
-              ...(protocolVersion
-                ? { "MCP-Protocol-Version": protocolVersion }
-                : {}),
-            },
+          const outcome = await transport.terminate({
+            sessionId,
+            protocolVersion,
             signal: link.signal,
+            headers: options.headers,
           });
           record({
             direction: "meta",
             at: Date.now(),
             event: "lifecycle",
             parsed: {
-              terminate: response.status,
-              outcome: classifyTerminate(response.status),
+              terminate: outcome.status,
+              outcome: outcome.outcome,
+              ...(outcome.reason ? { reason: outcome.reason } : {}),
             },
           });
         } catch (e) {
@@ -670,7 +619,9 @@ export function createMcpManualSession(
         }
       }
 
-      state = "closed";
+      await transport.dispose();
+
+      setState("closed");
       resolveClosed();
       closePromise = undefined;
     })();
@@ -681,7 +632,7 @@ export function createMcpManualSession(
   // Session-wide abort should tear things down, not leave a zombie.
   if (options.signal) {
     if (options.signal.aborted) {
-      state = "closed";
+      setState("closed");
       resolveClosed();
     } else {
       options.signal.addEventListener(
@@ -693,8 +644,21 @@ export function createMcpManualSession(
   }
 
   const session: McpManualSession = {
+    get protocol(): "mcp" {
+      return "mcp";
+    },
     get state() {
       return getState();
+    },
+
+    get events(): readonly SessionEventDTO[] {
+      return hub.events;
+    },
+
+    onEvent(
+      listener: (event: SessionEventDTO) => void,
+    ): SessionSubscription {
+      return hub.onEvent(listener);
     },
     get sessionId() {
       return sessionId;
@@ -704,9 +668,6 @@ export function createMcpManualSession(
     },
     get serverInfo() {
       return serverInfo;
-    },
-    get events() {
-      return events;
     },
 
     open,
@@ -762,9 +723,15 @@ export function createMcpManualSession(
       return { items, pages };
     },
 
-    callTool(name, args, opts) {
+    callTool(nameOrCall, args, opts) {
+      if (nameOrCall && typeof nameOrCall === "object") {
+        const call = nameOrCall as { name: string; arguments?: Record<string, unknown>; opts?: McpRequestOptions };
+        if (!call.name) throw err("BAD_MCP_TARGET", "callTool() requires a tool name.");
+        return request("tools/call", { name: call.name, arguments: call.arguments ?? {} }, call.opts ?? opts);
+      }
+      const name = nameOrCall as string;
       if (!name) throw err("BAD_MCP_TARGET", "callTool() requires a tool name.");
-      return request("tools/call", { name, arguments: args ?? {} }, opts);
+      return request("tools/call", { name, arguments: (args ?? {}) as Record<string, unknown> }, opts);
     },
 
     getPrompt(name, args, opts) {
@@ -785,6 +752,33 @@ export function createMcpManualSession(
 
   (session as any)[Symbol.asyncDispose] = () => close();
   return session;
+}
+
+/* ------------------------------------------------------------------ *
+ * Public factories
+ * ------------------------------------------------------------------ */
+
+/**
+ * Create a manual MCP session over either transport.
+ *
+ * - `{ transport: "streamable-http", endpoint }` (default)
+ * - `{ transport: "stdio", command, args?, cwd?, env? }`
+ */
+export function createMcpManualSession(
+  options: McpManualSessionOptions,
+): McpManualSession {
+  if (!options || typeof options !== "object") {
+    throw err("BAD_MCP_ENDPOINT", "MCP session options are required.");
+  }
+  const transport = resolveTransport(options);
+  return createMcpSessionCore(transport, options);
+}
+
+/** stdio-only convenience factory. */
+export function createMcpStdioSession(
+  options: McpStdioSessionOptions,
+): McpManualSession {
+  return createMcpManualSession({ ...options, transport: "stdio" });
 }
 
 /** @deprecated Use {@link createMcpManualSession}. */

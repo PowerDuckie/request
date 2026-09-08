@@ -1,11 +1,15 @@
-import { P as ProtocolAdapter, A as AdapterContext, E as ExecResult, J as Json, S as ScriptSource, a as SendOptions, b as ExecuteContext, c as ProtocolName, L as LocatedOperation, O as OperationTarget, d as SendResult } from './protocol-BBjdeNfE.js';
-export { e as AssertionResult, f as AuthConfig, C as ConsoleLog, G as GraphQLOptions, M as ManualMessage, g as ManualSession, h as McpOptions, i as OpenApiDocument, R as ReplayRecord, j as RequestValues, k as RequesterOptions, l as RuntimeRunOptions, m as ScriptConfig, n as ScriptOutcome, o as ScriptReport, p as StopReason, q as StreamEvent, r as StreamParserOptions, W as WebSocketOptions, s as locateOperation } from './protocol-BBjdeNfE.js';
+import { E as ExecResult, P as ProtocolName, S as SendResult, O as OperationTarget, a as SendOptions, b as OpenApiDocument, M as ManualSessionOptions, A as AnyManualSession, J as Json, c as ScriptSource, G as GrpcTarget, d as GrpcEndpoint, e as GrpcManualSessionTarget, f as GrpcManualSession } from './types-C9ifzKqk.js';
+export { g as AssertionResult, h as AuthConfig, C as Cloneable, i as CloneableError, j as ConsoleLog, k as CreateWsManualSessionOptions, D as DiscoverAndWriteResult, l as GeneratedOperation, m as GraphQLArg, n as GraphQLFieldInfo, o as GraphQLNamedType, p as GraphQLOptions, q as GraphQLTypeRef, r as GrpcCredentialsOptions, s as GrpcDescriptorSource, t as GrpcDescriptorSourceKind, u as GrpcEvent, v as GrpcEventDirection, w as GrpcManualSessionEvent, x as GrpcManualSessionState, y as GrpcMessageEvent, z as GrpcMetadataEvent, B as GrpcMetadataInput, F as GrpcMetadataOutput, H as GrpcMethodKind, I as GrpcProtoFileSource, K as GrpcReflectionSource, L as GrpcResult, N as GrpcSendOptions, Q as GrpcStatus, R as GrpcStatusEvent, T as GrpcStatusOrigin, U as GrpcTlsOptions, V as GrpcTruncatedReason, W as InitializeSessionInit, X as IntrospectedSchema, Y as IntrospectionResult, Z as JsonRpcOutcome, _ as ManualMessage, $ as ManualSession, a0 as ManualSessionKind, a1 as McpCapability, a2 as McpDiscoveryResult, a3 as McpListing, a4 as McpManualSession, a5 as McpManualSessionOptions, a6 as McpOptions, a7 as McpPrompt, a8 as McpRequestOptions, a9 as McpResource, aa as McpSessionEvent, ab as McpSessionState, ac as McpStdioSessionOptions, ad as McpTerminateOutcome, ae as McpTool, af as McpTransport, ag as ReplayRecord, ah as RequestValues, ai as RequesterOptions, aj as ResolvedGraphQLConfig, ak as ResolvedMcpConfig, al as ResolvedWsConfig, am as ResponseStartInfo, an as RuntimeRunOptions, ao as ScriptConfig, ap as ScriptOutcome, aq as ScriptReport, ar as SessionEventDTO, as as SessionState, at as SessionSubscription, au as StopReason, av as StreamEvent, aw as StreamParserOptions, ax as UnifiedSession, ay as WebSocketOptions, az as WebSocketSessionEvent, aA as WebSocketSessionState, aB as WriteGraphQLOptions, aC as WsManualSession, aD as WsSendOptions, aE as createEventHub, aF as toCloneable } from './types-C9ifzKqk.js';
+import { P as ProtocolAdapter, A as AdapterContext, L as LocatedOperation, E as ExecuteContext } from './protocol-D7sEx8IP.js';
+export { l as locateOperation } from './protocol-D7sEx8IP.js';
 export { HttpAdapter, SseParser } from './protocols/http/index.js';
-export { CreateWsManualSessionOptions, WebSocketAdapter, WebSocketSessionEvent, WebSocketSessionState, WsManualSession, WsSendOptions, createWsManualSession, createWsManualSession as runWebSocketSession, createWsManualSession as wsManualSession } from './protocols/ws/index.js';
-export { DiscoverAndWriteResult as DiscoverAndWriteGraphQLResult, GeneratedOperation, GraphQLAdapter, GraphQLArg, GraphQLFieldInfo, GraphQLNamedType, GraphQLTypeRef, INTROSPECTION_QUERY, IntrospectedSchema, IntrospectionResult, WriteGraphQLOptions, discoverAndWriteGraphQLSchema, generateAllOperations, generateOperation, introspectSchema, resolveGraphQLConfig, writeGraphQLOperations } from './protocols/graphql/index.js';
-export { D as DiscoverAndWriteMcpResult, G as GeneratedMcpCall, I as InitializeMcpSessionInit, M as MCP_PROTOCOL_VERSION, a as McpAdapter, b as McpCapability, c as McpDiscoveryResult, d as McpPrompt, e as McpResource, f as McpTool, R as ResolvedMcpConfig, W as WriteMcpOptions, g as discoverAndWriteMcpCapabilities, h as discoverMcpCapabilities, i as generateAllMcpCalls, j as generateMcpCall, k as initializeMcpSession, r as resolveMcpConfig, w as writeMcpOperations } from './index-DG2KaQHO.js';
-import { G as GrpcTarget, a as GrpcEndpoint, D as DiscoveryResult } from './discovery-BB4VjHB7.js';
-export { b as GrpcDiscoveredMethod, c as GrpcDiscoveredService, d as discoverGrpc, d as grpcDiscover } from './discovery-BB4VjHB7.js';
+export { WebSocketAdapter, createWsManualSession, createWsManualSession as runWebSocketSession, createWsManualSession as wsManualSession } from './protocols/ws/index.js';
+export { GraphQLAdapter, INTROSPECTION_QUERY, discoverAndWriteGraphQLSchema, generateAllOperations, generateOperation, introspectSchema, resolveGraphQLConfig, runGraphQL, writeGraphQLOperations } from './protocols/graphql/index.js';
+export { M as MCP_PROTOCOL_VERSION, a as McpAdapter, c as createHttpMcpTransport, b as createMcpManualSession, d as createMcpStdioSession, e as createStdioMcpTransport, f as discoverAndWriteMcpCapabilities, g as discoverMcpCapabilities, h as generateAllMcpCalls, i as generateMcpCall, j as initializeMcpSession, b as mcpManualSession, r as resolveMcpConfig, k as runMcpManualSession, w as writeMcpOperations } from './index-CsRXyS7O.js';
+import { D as DiscoveryResult } from './credentials-rqEKODvf.js';
+export { a as DescriptorDecodeError, G as GrpcAdapter, b as GrpcDependencyBrokenError, c as GrpcDependencyMissingError, d as GrpcDiscoveredMethod, e as GrpcDiscoveredService, L as LOADER_OPTIONS, R as ReflectionProtocolError, f as ReflectionUnavailableError, g as buildCatalog, h as buildCredentials, i as buildCredentialsAsync, j as buildCredentialsChecked, k as buildCredentialsCheckedAsync, l as buildMessageTemplate, m as decodeFileDescriptorProto, n as decodeFileDescriptorSet, o as deriveIncludeDirsDetailed, p as discoverGrpc, q as fetchDescriptorSet, r as fetchFullDescriptorSet, s as grpcCall, p as grpcDiscover, t as isGrpcAvailable, u as listServices, v as listServicesDetailed, w as loadGrpc, x as requireCapability, y as resolveMethod, z as scanProtoFiles, A as serializeDescriptorSet } from './credentials-rqEKODvf.js';
+import '@grpc/grpc-js';
+import '@grpc/proto-loader';
 
 declare class AdapterRegistry {
     private readonly entries;
@@ -61,6 +65,139 @@ declare function writeBackResponse(spec: any, path: string, method: string, frag
     statusCode: string;
     response: any;
 }, options?: WriteBackOptions): any;
+
+/**
+ * The full-featured debugger entry: adapter registry + protocol dispatch +
+ * OpenAPI write-back pipeline, plus `sendMany` and `toCollection`.
+ *
+ * `createClient` in "./client" is the UI-first surface (prepare/connect/
+ * discover); this one stays as the workhorse for scripted flows. Both share
+ * the same adapters and the same write-back machinery.
+ */
+
+interface DebuggerOptions {
+    adapters?: ProtocolAdapter<any>[];
+    extraAdapters?: ProtocolAdapter<any>[];
+    writeBack?: WriteBackOptions;
+    response?: ToResponseOptions;
+    /**
+     * Write back a schema inferred from a truncated stream.
+     *
+     * @default true
+     */
+    writeBackTruncated?: boolean;
+}
+interface PlanResult {
+    protocol: ProtocolName | string;
+    located: LocatedOperation;
+    collection?: any;
+    environment?: any;
+    streaming?: boolean;
+    warnings?: string[];
+    plan: unknown;
+}
+interface SendManyFailure {
+    target: OperationTarget;
+    error: string;
+}
+interface SendManyResult {
+    spec: any;
+    results: Array<SendResult | SendManyFailure>;
+}
+declare function createDebugger(config?: DebuggerOptions): {
+    registry: AdapterRegistry;
+    toCollection: (spec: any, target: OperationTarget, overrides?: Partial<Omit<SendOptions, "spec" | "target">>) => PlanResult;
+    send: (options: SendOptions) => Promise<SendResult>;
+    sendMany: (spec: any, targets: Array<{
+        target: OperationTarget;
+    } & Partial<Omit<SendOptions, "spec" | "target">>>, shared?: Partial<Omit<SendOptions, "spec" | "target">>) => Promise<SendManyResult>;
+};
+type ProtoKit = ReturnType<typeof createDebugger>;
+
+/**
+ * Decide, from the spec and caller intent, whether the operation is expected
+ * to stream. A caller-supplied Accept header wins, then an explicit
+ * `x-protocol` extension, then the declared response media types.
+ */
+declare function isStreamingOperation(operation: any, values?: {
+    header?: Record<string, unknown>;
+}): boolean;
+declare function isSseContentType(contentType?: string): boolean;
+declare function isStreamingContentType(contentType?: string): boolean;
+/**
+ * Build an Accept header from the declared response media types.
+ *
+ * Only successful responses contribute: advertising an error media type such as
+ * `application/problem+json` would distort content negotiation. Streaming types
+ * are listed first so a server that offers both variants picks the stream.
+ */
+declare function acceptHeaderFor(operation: any): string | undefined;
+/**
+ * Fire a real probe request and classify the live response as stream or not.
+ *
+ * The caller keeps ownership of `response` — this is deliberately not a HEAD
+ * helper: many streaming servers answer GET with `text/event-stream` but HEAD
+ * with an empty 200, so the probe uses the same request the real call will
+ * make. UI flows use it to pre-select the renderer before committing to a
+ * session.
+ */
+declare function probeStreamingResponse(input: RequestInfo | URL, init?: RequestInit): Promise<{
+    ok: boolean;
+    status: number;
+    contentType?: string;
+    kind: "none" | "sse" | "ndjson" | "chunked";
+    response: Response;
+}>;
+
+/** How the UI should render this call. */
+type DisplayMode = "response" | "event-list" | "duplex-session";
+/** Precise streaming taxonomy used to pick a renderer / message schema. */
+type StreamKind = "none" | "sse" | "ndjson" | "chunked" | "websocket" | "graphql-stream" | "grpc-unary" | "grpc-server-stream" | "grpc-client-stream" | "grpc-bidi" | "mcp-http-stream" | "mcp-stdio";
+interface PreparedRequest {
+    protocol: string;
+    transport: string;
+    target?: OperationTarget;
+    operation?: any;
+    display: {
+        mode: DisplayMode;
+    };
+    stream: {
+        kind: StreamKind;
+        expected: boolean;
+    };
+    openapi: {
+        extensions: Record<string, unknown>;
+    };
+    warnings: string[];
+}
+interface CreateClientOptions {
+    writeBack?: WriteBackOptions;
+    response?: ToResponseOptions;
+}
+declare function createClient(options?: CreateClientOptions): {
+    prepare: (sendOptions: SendOptions) => PreparedRequest;
+    send: (sendOptions: SendOptions) => Promise<SendResult>;
+    sendMany: (spec: OpenApiDocument, targets: Array<{
+        target: OperationTarget;
+    } & Partial<Omit<SendOptions, "spec" | "target">>>, shared?: Partial<Omit<SendOptions, "spec" | "target">>) => Promise<SendManyResult>;
+    connect: (connectOptions: ManualSessionOptions) => AnyManualSession;
+    discover: (discoverOptions: any) => Promise<any>;
+    writeback: (spec: OpenApiDocument, prepared: PreparedRequest, result: SendResult, writeOptions?: Partial<WriteBackOptions>) => OpenApiDocument;
+    dispose: () => void;
+    probeStreamingResponse: typeof probeStreamingResponse;
+};
+type ProtoClient = ReturnType<typeof createClient>;
+
+/**
+ * Unified manual-session entry.
+ *
+ * `createManualSession(options)` routes by `options.kind` to the matching
+ * protocol factory (WebSocket / MCP / gRPC). The factories themselves stay
+ * protocol-specific so their richer contracts are preserved; this entry is
+ * for callers that want one surface across all three.
+ */
+
+declare function createManualSession(options: ManualSessionOptions): AnyManualSession;
 
 /**
  * Unified error type for the whole toolkit.
@@ -159,104 +296,6 @@ declare function sampleFromSchema(schema: any, depth?: number, options?: SampleO
  */
 declare const BUILTIN_CAPTURE_TEST: ScriptSource;
 
-interface JsonRpcOutcome {
-    /** The JSON-RPC response object, when the server sent one back. */
-    message: any | undefined;
-    status: number;
-    statusText: string;
-    headers: Record<string, string>;
-    contentType?: string;
-    sessionId?: string;
-    /** Raw text body, kept for non-JSON-RPC diagnostics. */
-    rawText?: string;
-    sizeBytes: number;
-    firstByteMs: number;
-}
-
-type McpSessionState = "idle" | "opening" | "open" | "closing" | "closed";
-interface McpSessionEvent {
-    direction: "in" | "out" | "meta";
-    at: number;
-    event: "session" | "jsonrpc" | "notification" | "error" | "lifecycle";
-    /** JSON text of `parsed`, or undefined when there was no body (202/204). */
-    data?: string;
-    parsed?: unknown;
-}
-interface McpManualSessionOptions {
-    endpoint: string;
-    headers?: Record<string, string>;
-    clientInfo?: {
-        name: string;
-        version: string;
-    };
-    /** Client capabilities advertised at initialize. Default: {}. */
-    capabilities?: Record<string, unknown>;
-    /** Per-request timeout in ms. 0/undefined disables. Default 30_000. */
-    timeoutMs?: number;
-    /** Aborts the whole session (open, in-flight sends, close). */
-    signal?: AbortSignal;
-    /** Ring-buffer cap for `events`. Default 1000. 0 = unbounded. */
-    maxEvents?: number;
-    /** Redact secret-looking values in recorded events. Default true. */
-    redactSecrets?: boolean;
-    /**
-     * Issue list calls one at a time. Needed only for servers that cannot
-     * handle concurrent requests on one session. Default false.
-     */
-    serialize?: boolean;
-}
-interface McpRequestOptions {
-    delayMs?: number;
-    timeoutMs?: number;
-    signal?: AbortSignal;
-    /** Return the raw outcome instead of throwing on JSON-RPC errors. */
-    raw?: boolean;
-}
-interface McpListing<T> {
-    items: T[];
-    pages: number;
-}
-/** How a session-termination DELETE was answered. */
-type McpTerminateOutcome = "released" | "unsupported" | "already-gone" | "failed";
-interface McpManualSession {
-    readonly state: McpSessionState;
-    readonly sessionId: string | undefined;
-    readonly protocolVersion: string | undefined;
-    readonly serverInfo: {
-        name: string;
-        version: string;
-    } | undefined;
-    readonly events: readonly McpSessionEvent[];
-    open(): Promise<void>;
-    request<T = any>(method: string, params?: unknown, options?: McpRequestOptions): Promise<T>;
-    send(message: unknown, options?: McpRequestOptions): Promise<JsonRpcOutcome>;
-    notify(method: string, params?: unknown, options?: McpRequestOptions): Promise<void>;
-    ping(options?: McpRequestOptions): Promise<void>;
-    listTools(options?: McpRequestOptions): Promise<McpListing<any>>;
-    listPrompts(options?: McpRequestOptions): Promise<McpListing<any>>;
-    listResources(options?: McpRequestOptions): Promise<McpListing<any>>;
-    listResourceTemplates(options?: McpRequestOptions): Promise<McpListing<any>>;
-    /** Concrete resources + templates, merged. */
-    listSources(options?: McpRequestOptions): Promise<McpListing<any>>;
-    callTool(name: string, args?: Record<string, unknown>, options?: McpRequestOptions): Promise<any>;
-    getPrompt(name: string, args?: Record<string, unknown>, options?: McpRequestOptions): Promise<any>;
-    readResource(uri: string, options?: McpRequestOptions): Promise<any>;
-    close(): Promise<void>;
-    waitForClose(): Promise<void>;
-    [Symbol.asyncDispose]?: () => Promise<void>;
-}
-/**
- * Long-lived, stateful MCP session over Streamable HTTP.
- *
- * Unlike `runMcp()` — which is one self-contained sample with its own
- * handshake — this keeps a single negotiated session open so a caller can
- * drive `initialize -> list -> call -> DELETE` by hand, mirroring
- * `createWsManualSession` and `createGrpcManualSession`.
- */
-declare function createMcpManualSession(options: McpManualSessionOptions): McpManualSession;
-/** @deprecated Use {@link createMcpManualSession}. */
-declare const runMcpManualSession: typeof createMcpManualSession;
-
 interface WriteGrpcOptions {
     pathPrefix?: string;
 }
@@ -298,85 +337,14 @@ declare class GrpcProtocolAdapter implements ProtocolAdapter<any> {
     execute(plan: any, options: SendOptions, _ctx?: ExecuteContext): Promise<ExecResult>;
 }
 
-type GrpcMethodKind = "unary" | "server_streaming" | "client_streaming" | "bidi_streaming";
-type GrpcManualSessionState = "idle" | "connecting" | "open" | "closing" | "closed" | "error";
-type GrpcDescriptorSourceKind = "proto" | "reflection";
-interface GrpcManualSessionEvent {
-    direction: "outbound" | "inbound" | "status" | "meta";
-    event?: "open" | "metadata" | "data" | "status" | "error" | "end" | "close";
-    payload?: unknown;
-    metadata?: unknown;
-    code?: number;
-    details?: string;
-    statusName?: string;
-    error?: string;
-    at: number;
-}
-interface GrpcManualSessionTarget {
-    address: string;
-    reflection?: boolean;
-    protoPaths?: string[];
-    service: string;
-    method: string;
-    metadata?: Record<string, string>;
-    deadlineMs?: number;
-    loaderOptions?: Record<string, unknown>;
-    channelOptions?: Record<string, unknown>;
-    tls?: unknown;
-    reflectionTimeoutMs?: number;
-    reflectionVersion?: "v1" | "v1alpha";
-    reflectionHost?: string;
-}
-interface GrpcManualSession {
-    readonly state: GrpcManualSessionState;
-    readonly kind: GrpcMethodKind;
-    readonly source: GrpcDescriptorSourceKind;
-    readonly events: readonly GrpcManualSessionEvent[];
-    readonly warnings: readonly unknown[];
-    open(): Promise<void>;
-    send(message: unknown): Promise<void>;
-    close(): Promise<void>;
-    waitForClose(): Promise<void>;
-}
-declare function createGrpcManualSession(target: GrpcManualSessionTarget): Promise<GrpcManualSession>;
+/**
+ * Create a manual gRPC session.
+ *
+ * The factory is synchronous and performs no I/O: descriptor loading (proto
+ * files or reflection) happens lazily inside `open()`. This keeps the manual
+ * session contract uniform across protocols — construct first, drive later —
+ * and avoids a constructor that can throw network errors.
+ */
+declare function createGrpcManualSession(target: GrpcManualSessionTarget): GrpcManualSession;
 
-interface DebuggerOptions {
-    adapters?: ProtocolAdapter<any>[];
-    extraAdapters?: ProtocolAdapter<any>[];
-    writeBack?: WriteBackOptions;
-    response?: ToResponseOptions;
-    /**
-     * Write back a schema inferred from a truncated stream.
-     *
-     * @default true
-     */
-    writeBackTruncated?: boolean;
-}
-interface PlanResult {
-    protocol: ProtocolName | string;
-    located: LocatedOperation;
-    collection?: any;
-    environment?: any;
-    streaming?: boolean;
-    warnings?: string[];
-    plan: unknown;
-}
-interface SendManyFailure {
-    target: OperationTarget;
-    error: string;
-}
-interface SendManyResult {
-    spec: any;
-    results: Array<SendResult | SendManyFailure>;
-}
-declare function createDebugger(config?: DebuggerOptions): {
-    registry: AdapterRegistry;
-    toCollection: (spec: any, target: OperationTarget, overrides?: Partial<Omit<SendOptions, "spec" | "target">>) => PlanResult;
-    send: (options: SendOptions) => Promise<SendResult>;
-    sendMany: (spec: any, targets: Array<{
-        target: OperationTarget;
-    } & Partial<Omit<SendOptions, "spec" | "target">>>, shared?: Partial<Omit<SendOptions, "spec" | "target">>) => Promise<SendManyResult>;
-};
-type ProtoKit = ReturnType<typeof createDebugger>;
-
-export { AdapterContext, AdapterRegistry, BUILTIN_CAPTURE_TEST, type DebuggerOptions, ExecResult, ExecuteContext, DiscoveryResult as GrpcDiscoveryResult, type GrpcManualSession, type GrpcManualSessionEvent, type GrpcManualSessionState, type GrpcManualSessionTarget, GrpcProtocolAdapter, Json, LocatedOperation, type McpListing, type McpManualSession, type McpManualSessionOptions, type McpRequestOptions, type McpSessionEvent, type McpSessionState, type McpTerminateOutcome, OperationTarget, type PlanResult, type ProtoKit, ProtoKitError, ProtocolAdapter, ProtocolName, ScriptSource, type SendManyFailure, type SendManyResult, SendOptions, SendResult, type ToResponseOptions, type WriteBackOptions, createDebugger, createGrpcManualSession, createMcpManualSession, discoverAndWriteGrpcOperations, createGrpcManualSession as grpcManualSession, inferSchema, inferSchemaFromMany, createMcpManualSession as mcpManualSession, mergeSchema, runMcpManualSession, sampleFromSchema, toResponseObject, writeBackResponse, writeGrpcOperations };
+export { AdapterContext, AdapterRegistry, AnyManualSession, BUILTIN_CAPTURE_TEST, type CreateClientOptions, type DebuggerOptions, type DisplayMode, ExecResult, ExecuteContext, DiscoveryResult as GrpcDiscoveryResult, GrpcEndpoint, GrpcManualSession, GrpcManualSessionTarget, GrpcProtocolAdapter, GrpcTarget, Json, LocatedOperation, ManualSessionOptions, OpenApiDocument, OperationTarget, type PlanResult, type PreparedRequest, type ProtoClient, type ProtoKit, ProtoKitError, ProtocolAdapter, ProtocolName, ScriptSource, type SendManyFailure, type SendManyResult, SendOptions, SendResult, type StreamKind, type ToResponseOptions, type WriteBackOptions, acceptHeaderFor, createClient, createDebugger, createGrpcManualSession, createManualSession, discoverAndWriteGrpcOperations, createGrpcManualSession as grpcManualSession, inferSchema, inferSchemaFromMany, isSseContentType, isStreamingContentType, isStreamingOperation, mergeSchema, probeStreamingResponse, sampleFromSchema, toResponseObject, writeBackResponse, writeGrpcOperations };

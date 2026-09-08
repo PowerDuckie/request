@@ -4,6 +4,7 @@ import type {
   ExecuteContext,
 } from "../../core/protocol";
 import type { SendOptions, ExecResult } from "../../core/types";
+import { isPlainObject, isSecretKey } from "../../core/utils";
 import { resolveMcpConfig, type ResolvedMcpConfig } from "./config";
 import { runMcp } from "./client";
 
@@ -12,17 +13,15 @@ export interface McpPlan {
   environment: Record<string, any>;
 }
 
-const SECRET_KEY_PATTERN =
-  /(token|secret|password|passwd|apikey|api_key|credential|private)/i;
-
 /**
- * MCP (Model Context Protocol) adapter, using the Streamable HTTP transport.
+ * MCP (Model Context Protocol) adapter, covering the Streamable HTTP and
+ * stdio transports.
  *
  * An operation is claimed when it declares `x-protocol: mcp`, carries an
  * `x-mcp` extension (normally produced by {@link writeMcpOperations}), or the
- * caller passes `options.mcp`. Like GraphQL, MCP is one JSON-RPC call over
- * plain HTTP rather than a Postman-shaped request/response, so it gets its
- * own adapter instead of routing through the HTTP one.
+ * caller passes `options.mcp`. Like GraphQL, MCP is one JSON-RPC call rather
+ * than a Postman-shaped request/response, so it gets its own adapter instead
+ * of routing through the HTTP one.
  */
 export class McpAdapter implements ProtocolAdapter<McpPlan> {
   readonly name = "mcp";
@@ -45,7 +44,7 @@ export class McpAdapter implements ProtocolAdapter<McpPlan> {
         .map(([key, value]) => ({
           key,
           value: value == null ? "" : String(value),
-          type: SECRET_KEY_PATTERN.test(key) ? "secret" : "default",
+          type: isSecretKey(key) ? "secret" : "default",
           enabled: true,
         })),
     ];
@@ -74,10 +73,6 @@ export class McpAdapter implements ProtocolAdapter<McpPlan> {
   }
 }
 
-function isPlainObject(value: unknown): value is Record<string, any> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
 export { resolveMcpConfig } from "./config";
 export { runMcp } from "./client";
 export {
@@ -91,8 +86,29 @@ export type {
   McpResource,
   McpPrompt,
   McpDiscoveryResult,
-} from "./discovery";
+} from "../../types";
 export { generateMcpCall, generateAllMcpCalls } from "./generate";
 export type { GeneratedMcpCall } from "./generate";
 export { writeMcpOperations, discoverAndWriteMcpCapabilities } from "./writeback";
 export type { WriteMcpOptions, DiscoverAndWriteMcpResult } from "./writeback";
+export {
+  createMcpManualSession,
+  createMcpSessionCore,
+  createMcpStdioSession,
+  createMcpManualSession as mcpManualSession,
+  createMcpManualSession as runMcpManualSession,
+} from "./session";
+export type {
+  McpListing,
+  McpManualSession,
+  McpManualSessionOptions,
+  McpRequestOptions,
+  McpSessionEvent,
+  McpSessionState,
+  McpStdioSessionOptions,
+  McpTerminateOutcome,
+} from "../../types";
+export { createMcpStdioConnection } from "./stdio";
+export type { McpStdioConnection, McpStdioOptions } from "./stdio";
+export { createHttpMcpTransport, createStdioMcpTransport } from "./transport";
+export type { McpTransport } from "./transport";

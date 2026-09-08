@@ -1,6 +1,7 @@
 import { deepClone, isPlainObject } from "../../core/utils";
 import { err } from "../../core/errors";
-import { discoverMcpCapabilities, type McpCapability } from "./discovery";
+import { discoverMcpCapabilities } from "./discovery";
+import type { McpCapability } from "../../types";
 import { generateAllMcpCalls, type GeneratedMcpCall } from "./generate";
 
 export interface WriteMcpOptions {

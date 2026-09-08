@@ -151,3 +151,40 @@ export function acceptHeaderFor(operation: any): string | undefined {
 
   return list.slice(0, 8).join(", ");
 }
+
+/**
+ * Fire a real probe request and classify the live response as stream or not.
+ *
+ * The caller keeps ownership of `response` — this is deliberately not a HEAD
+ * helper: many streaming servers answer GET with `text/event-stream` but HEAD
+ * with an empty 200, so the probe uses the same request the real call will
+ * make. UI flows use it to pre-select the renderer before committing to a
+ * session.
+ */
+export async function probeStreamingResponse(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<{
+  ok: boolean;
+  status: number;
+  contentType?: string;
+  kind: "none" | "sse" | "ndjson" | "chunked";
+  response: Response;
+}> {
+  const response = await fetch(input, init);
+  const contentType = response.headers.get("content-type") ?? undefined;
+  const transferEncoding = response.headers.get("transfer-encoding") ?? "";
+  let kind: "none" | "sse" | "ndjson" | "chunked" = "none";
+  if (isSseContentType(contentType)) kind = "sse";
+  else if (isStreamingContentType(contentType)) kind = "ndjson";
+  // Transfer-Encoding: chunked is how Node delivers many plain bodies; only
+  // treat it as a stream when the server did not say what the type is.
+  else if (!contentType && /chunked/i.test(transferEncoding)) kind = "chunked";
+  return {
+    ok: response.ok,
+    status: response.status,
+    contentType,
+    kind,
+    response,
+  };
+}

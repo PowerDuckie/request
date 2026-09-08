@@ -1,4 +1,12 @@
 import { err } from "../../core/errors";
+import type {
+  GraphQLArg,
+  GraphQLFieldInfo,
+  GraphQLNamedType,
+  GraphQLTypeRef,
+  IntrospectedSchema,
+  IntrospectionResult,
+} from "../../core/types";
 
 /** Standard GraphQL introspection query (spec-October2021), trimmed of directive locations we don't use. */
 export const INTROSPECTION_QUERY = `
@@ -57,50 +65,6 @@ fragment TypeRef on __Type {
   }
 }
 `.trim();
-
-export interface GraphQLTypeRef {
-  kind: string;
-  name?: string | null;
-  ofType?: GraphQLTypeRef | null;
-}
-
-export interface GraphQLArg {
-  name: string;
-  description?: string | null;
-  type: GraphQLTypeRef;
-  defaultValue?: string | null;
-}
-
-export interface GraphQLFieldInfo {
-  name: string;
-  description?: string | null;
-  args: GraphQLArg[];
-  type: GraphQLTypeRef;
-  isDeprecated?: boolean;
-}
-
-export interface GraphQLNamedType {
-  kind: string;
-  name: string;
-  description?: string | null;
-  fields?: GraphQLFieldInfo[];
-  inputFields?: GraphQLArg[];
-  enumValues?: Array<{ name: string }>;
-}
-
-export interface IntrospectedSchema {
-  queryType?: string;
-  mutationType?: string;
-  subscriptionType?: string;
-  /** Every named type, keyed by name, for resolving arg/field types during generation. */
-  types: Map<string, GraphQLNamedType>;
-}
-
-export interface IntrospectionResult {
-  schema: IntrospectedSchema;
-  /** Raw `__schema` payload, kept for callers that want more than this module parses. */
-  raw: any;
-}
 
 /**
  * Auto-fetch a GraphQL server's schema via the standard introspection query.

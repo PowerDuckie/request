@@ -1,16 +1,12 @@
 import { deepClone, isPlainObject } from "../../core/utils";
 import { err } from "../../core/errors";
-import type { GeneratedOperation } from "./generate";
+import type {
+  GeneratedOperation,
+  WriteGraphQLOptions,
+  DiscoverAndWriteResult,
+} from "../../core/types";
 import { introspectSchema } from "./introspection";
 import { generateAllOperations } from "./generate";
-
-export interface WriteGraphQLOptions {
-  /** Overwrite an existing path for the same operation. Defaults to true. */
-  overwrite?: boolean;
-  /** Extra headers to send with the introspection request (auth, etc.). */
-  headers?: Record<string, string>;
-  signal?: AbortSignal;
-}
 
 /** Path under which one operation is filed: `/graphql/{type}/{field}`. */
 function pathFor(op: GeneratedOperation): string {
@@ -74,12 +70,6 @@ export function writeGraphQLOperations(
   }
 
   return next;
-}
-
-export interface DiscoverAndWriteResult {
-  spec: any;
-  operations: GeneratedOperation[];
-  warnings: string[];
 }
 
 /**

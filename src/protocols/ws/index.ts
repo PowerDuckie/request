@@ -4,6 +4,7 @@ import type {
   ExecuteContext,
 } from "../../core/protocol";
 import type { SendOptions, ExecResult } from "../../core/types";
+import { isSecretKey } from "../../core/utils";
 import { resolveWsConfig, type ResolvedWsConfig } from "./config";
 import { runWebSocket } from "./connection";
 
@@ -11,9 +12,6 @@ export interface WsPlan {
   config: ResolvedWsConfig;
   environment: Record<string, any>;
 }
-
-const SECRET_KEY_PATTERN =
-  /(token|secret|password|passwd|apikey|api_key|credential|private)/i;
 
 export class WebSocketAdapter implements ProtocolAdapter<WsPlan> {
   readonly name = "websocket";
@@ -62,7 +60,7 @@ export class WebSocketAdapter implements ProtocolAdapter<WsPlan> {
         .map(([key, value]) => ({
           key,
           value: value == null ? "" : String(value),
-          type: SECRET_KEY_PATTERN.test(key) ? "secret" : "default",
+          type: isSecretKey(key) ? "secret" : "default",
           enabled: true,
         })),
     ];
@@ -110,4 +108,4 @@ export type {
   WebSocketSessionState,
   WsManualSession,
   WsSendOptions,
-} from "./session";
+} from "../../types";

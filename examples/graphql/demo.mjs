@@ -1,113 +1,39 @@
-import fs from "node:fs/promises";
-import {
-  createDebugger,
-  discoverAndWriteGraphQLSchema,
-} from "../../dist/index.js";
+// GraphQL demo: introspect the schema, write operations into an OpenAPI
+// document, then send one query through createClient and write the response
+// back into the document.
+//
+//   node examples/graphql/demo.mjs
+//   (start examples/graphql/server.mjs first)
+import { createClient, discoverAndWriteGraphQLSchema } from "../../dist/index.js";
 
-const ENDPOINT = process.env.GRAPHQL_URL ?? "http://127.0.0.1:4100/graphql";
-
-const pk = createDebugger({
-  writeBack: { strategy: "merge", requirePassingTests: false },
-  response: { includeExamples: true },
-});
-
-/* ------------------------------------------------------------------ */
-/* 1. Auto-fetch: introspect the live schema + generate runnable docs   */
-/*    for every query/mutation/subscription field ("自动获取query").    */
-/* ------------------------------------------------------------------ */
-
-let spec = {
+const spec = {
   openapi: "3.2.0",
-  info: { title: "GraphQL Demo", version: "1.0.0" },
-  servers: [{ url: ENDPOINT }],
+  info: { title: "graphql-demo", version: "1.0.0" },
+  servers: [{ url: "http://127.0.0.1:4300" }],
   paths: {},
 };
 
-const discovered = await discoverAndWriteGraphQLSchema(spec, ENDPOINT);
-spec = discovered.spec;
-
-console.log(spec, `discovered ${discovered.operations.length} operation(s):`);
-for (const op of discovered.operations) {
-  console.log(`  ${op.operationType.padEnd(8)} ${op.fieldName}`);
-}
-for (const w of discovered.warnings) console.log(`  ! ${w}`);
-
-/* ------------------------------------------------------------------ */
-/* 2. Upload confirmation: the generated operations are now ordinary    */
-/*    OpenAPI paths, addressable by operationId like any REST call.     */
-/* ------------------------------------------------------------------ */
-
-await fs.writeFile(
-  new URL("./openapi.generated.json", import.meta.url),
-  JSON.stringify(spec, null, 2),
-  "utf8",
+const { spec: withOp, operations } = await discoverAndWriteGraphQLSchema(
+  spec,
+  "http://127.0.0.1:4300/graphql",
 );
-console.log("generated schema written to openapi.generated.json");
+console.log("generated operations:", operations.map((op) => op.operationType + " " + op.fieldName).join(", "));
 
-/* ------------------------------------------------------------------ */
-/* 3. Send a generated query, sampled variables and all                 */
-/* ------------------------------------------------------------------ */
+const target = { path: "/graphql/query/hello", method: "post" };
+const client = createClient();
 
-const userResult = await pk.send({
-  spec,
-  target: { operationId: "graphql_query_user" },
-  graphql: { variables: { id: "1" } },
+const prepared = client.prepare({ spec: withOp, target });
+console.log("prepare:", prepared.display.mode, prepared.stream.kind);
+
+const result = await client.send({
+  spec: withOp,
+  target,
+  graphql: { variables: { name: "Ada" } },
 });
+console.log("response:", JSON.stringify(result.response.body));
 
-console.log("\nquery user(id: 1)");
-console.log("status   :", userResult.response.status);
-console.log("data     :", JSON.stringify(userResult.response.body?.data));
-console.log("errors   :", userResult.response.body?.errors ?? "none");
-
-if (userResult.patchedSpec) spec = userResult.patchedSpec;
-
-/* ------------------------------------------------------------------ */
-/* 4. Send a mutation with an explicit query override                   */
-/* ------------------------------------------------------------------ */
-
-const createPostResult = await pk.send({
-  spec,
-  target: { operationId: "graphql_mutation_createPost" },
-  graphql: {
-    variables: {
-      input: {
-        title: "Shipped it",
-        body: "The MCP + GraphQL adapters are in.",
-        authorId: "2",
-      },
-    },
-  },
-});
-
-console.log("\nmutation createPost(...)");
-console.log("status   :", createPostResult.response.status);
-console.log("data     :", JSON.stringify(createPostResult.response.body?.data));
-console.log("errors   :", createPostResult.response.body?.errors ?? "none");
-
-if (createPostResult.patchedSpec) spec = createPostResult.patchedSpec;
-
-/* ------------------------------------------------------------------ */
-/* 5. A hand-written query, bypassing discovery entirely                */
-/* ------------------------------------------------------------------ */
-
-const listResult = await pk.send({
-  spec,
-  target: { operationId: "graphql_query_users" },
-  graphql: {
-    query: `query Users($role: Role) { users(role: $role) { id name role } }`,
-    variables: { role: "MEMBER" },
-  },
-});
-
-console.log("\nquery users(role: MEMBER) [hand-written override]");
-console.log("status   :", listResult.response.status);
-console.log("data     :", JSON.stringify(listResult.response.body?.data));
-
-await fs.writeFile(
-  new URL("./openapi.patched.json", import.meta.url),
-  JSON.stringify(spec, null, 2),
-  "utf8",
-);
+const patched = client.writeback(withOp, prepared, result);
 console.log(
-  "\npatched spec (with response examples) written to openapi.patched.json",
+  "writeback status keys:",
+  Object.keys(patched.paths["/graphql/query/hello"].post.responses ?? {}).join(", "),
 );

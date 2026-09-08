@@ -1,5 +1,5 @@
 import { sampleFromSchema } from "../../openapi/sample";
-import type { McpCapability } from "./discovery";
+import type { McpCapability } from "../../types";
 
 export interface GeneratedMcpCall {
   capability: McpCapability;

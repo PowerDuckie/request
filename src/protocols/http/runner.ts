@@ -14,7 +14,13 @@ import type {
 } from "../../core/types";
 import type { ExecuteContext } from "../../core/protocol";
 import { err, toErrorInfo } from "../../core/errors";
-import { createLatch, safeClearTimeout, jsonClone } from "../../core/utils";
+import {
+  createLatch,
+  jsonClone,
+  positiveInt,
+  safeClearTimeout,
+  tryParseJson,
+} from "../../core/utils";
 import { SseParser } from "./sse-parser";
 import { isSseContentType, isStreamingContentType } from "./detect";
 import { buildRunOptions } from "./runner-options";
@@ -80,18 +86,6 @@ function scopeToObject(scope: any): Record<string, string> | undefined {
   }
 }
 
-function tryParseJson(text: string | undefined, contentType?: string): unknown {
-  if (!text) return undefined;
-  if (contentType && !/json/i.test(contentType)) return undefined;
-  const trimmed = text.trim();
-  if (!trimmed) return undefined;
-  if (!/^[[{"\-\d]|^(true|false|null)$/.test(trimmed)) return undefined;
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return undefined;
-  }
-}
 
 function extractRequestBody(request: any): unknown {
   const body = request?.body;
@@ -201,9 +195,9 @@ export function runWithPostman(
   let stopReason: StopReason | undefined;
   let networkDurationMs: number | undefined;
 
-  const maxEvents = normalizePositive(options.maxEvents, 100);
-  const maxStreamMs = normalizePositive(options.maxStreamMs, 30_000);
-  const requestTimeout = normalizePositive(
+  const maxEvents = positiveInt(options.maxEvents, 100);
+  const maxStreamMs = positiveInt(options.maxStreamMs, 30_000);
+  const requestTimeout = positiveInt(
     options.runner?.timeout?.request ?? options.timeout,
     30_000,
   );
@@ -556,6 +550,9 @@ export function runWithPostman(
       },
 
       // Fires as soon as headers arrive, before the body is complete.
+      // The `streaming` flag is the early SSE classification the UI switches
+      // on: it reflects the spec hint OR the live content-type, whichever
+      // declared the stream first.
       responseStart(_error: any, _cursor: any, response: any) {
         if (phase === "initialized") phase = "headers";
         firstByteAt ??= Date.now();
@@ -571,6 +568,9 @@ export function runWithPostman(
             status: response?.code ?? 0,
             headers: headersOf(response?.headers),
             contentType,
+            streaming,
+            protocol: streaming ? "sse" : "http",
+            url: input.baseUrl,
           }),
         );
 
@@ -710,7 +710,16 @@ export function runWithPostman(
             statusText: safeReason(response),
             headers: headersOf(response?.headers),
             contentType,
-            ...(streaming ? { events } : { body, text }),
+            ...(streaming
+              ? {
+                  streaming: true,
+                  events,
+                  body: Object.assign(
+                    {},
+                    ...events.map((event) => event.parsed),
+                  ),
+                }
+              : { body, text }),
             timings: {
               startedAt,
               endedAt,
@@ -799,10 +808,6 @@ export function runWithPostman(
   return latch.promise;
 }
 
-function normalizePositive(value: unknown, fallback: number): number {
-  const n = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
-}
 
 /** Respect caller-supplied agents; socket tracking is opt-out by conflict. */
 function hasUserAgents(options: SendOptions): boolean {

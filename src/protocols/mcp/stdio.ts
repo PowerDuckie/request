@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import { err } from "../../core/errors";
+import { messageOf, sleep } from "../../core/utils";
 
 export interface McpStdioOptions {
   command: string;
@@ -399,12 +400,4 @@ function isRpcMessage(value: unknown): value is StdioRpcMessage {
     typeof value === "object" &&
     (value as { jsonrpc?: unknown }).jsonrpc === "2.0"
   );
-}
-
-function messageOf(value: unknown): string {
-  return value instanceof Error ? value.message : String(value);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

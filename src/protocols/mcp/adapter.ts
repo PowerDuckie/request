@@ -6,14 +6,13 @@ import type {
 import type { SendOptions, ExecResult } from "../../core/types";
 import { resolveMcpConfig, type ResolvedMcpConfig } from "./config";
 import { runMcp } from "./client";
+import { isPlainObject, isSecretKey } from "../../core/utils";
 
 export interface McpPlan {
   config: ResolvedMcpConfig;
   environment: Record<string, any>;
 }
 
-const SECRET_KEY_PATTERN =
-  /(token|secret|password|passwd|apikey|api_key|credential|private)/i;
 
 /**
  * MCP (Model Context Protocol) adapter, supporting Streamable HTTP and stdio transports.
@@ -45,7 +44,7 @@ export class McpAdapter implements ProtocolAdapter<McpPlan> {
         .map(([key, value]) => ({
           key,
           value: value == null ? "" : String(value),
-          type: SECRET_KEY_PATTERN.test(key) ? "secret" : "default",
+          type: isSecretKey(key) ? "secret" : "default",
           enabled: true,
         })),
     ];
@@ -74,10 +73,6 @@ export class McpAdapter implements ProtocolAdapter<McpPlan> {
   }
 }
 
-function isPlainObject(value: unknown): value is Record<string, any> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
 export { resolveMcpConfig } from "./config";
 export { runMcp } from "./client";
 export {
@@ -91,7 +86,7 @@ export type {
   McpResource,
   McpPrompt,
   McpDiscoveryResult,
-} from "./discovery";
+} from "../../types";
 export { generateMcpCall, generateAllMcpCalls } from "./generate";
 export type { GeneratedMcpCall } from "./generate";
 export { writeMcpOperations, discoverAndWriteMcpCapabilities } from "./writeback";

@@ -6,14 +6,13 @@ import type {
 import type { SendOptions, ExecResult } from "../../core/types";
 import { resolveGraphQLConfig, type ResolvedGraphQLConfig } from "./config";
 import { runGraphQL } from "./client";
+import { isSecretKey } from "../../core/utils";
 
 export interface GraphQLPlan {
   config: ResolvedGraphQLConfig;
   environment: Record<string, any>;
 }
 
-const SECRET_KEY_PATTERN =
-  /(token|secret|password|passwd|apikey|api_key|credential|private)/i;
 
 /**
  * GraphQL adapter.
@@ -47,7 +46,7 @@ export class GraphQLAdapter implements ProtocolAdapter<GraphQLPlan> {
         .map(([key, value]) => ({
           key,
           value: value == null ? "" : String(value),
-          type: SECRET_KEY_PATTERN.test(key) ? "secret" : "default",
+          type: isSecretKey(key) ? "secret" : "default",
           enabled: true,
         })),
     ];
@@ -83,18 +82,19 @@ function isPlainObject(value: unknown): value is Record<string, any> {
 export { resolveGraphQLConfig } from "./config";
 export { runGraphQL } from "./client";
 export { introspectSchema, INTROSPECTION_QUERY } from "./introspection";
-export type {
-  IntrospectedSchema,
-  IntrospectionResult,
-  GraphQLNamedType,
-  GraphQLFieldInfo,
-  GraphQLArg,
-  GraphQLTypeRef,
-} from "./introspection";
 export { generateOperation, generateAllOperations } from "./generate";
-export type { GeneratedOperation } from "./generate";
 export {
   writeGraphQLOperations,
   discoverAndWriteGraphQLSchema,
 } from "./writeback";
-export type { WriteGraphQLOptions, DiscoverAndWriteResult } from "./writeback";
+export type {
+  DiscoverAndWriteResult,
+  GeneratedOperation,
+  GraphQLArg,
+  GraphQLFieldInfo,
+  GraphQLNamedType,
+  GraphQLTypeRef,
+  IntrospectedSchema,
+  IntrospectionResult,
+  WriteGraphQLOptions,
+} from "../../types";

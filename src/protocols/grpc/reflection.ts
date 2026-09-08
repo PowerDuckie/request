@@ -1,4 +1,5 @@
 import { loadGrpc } from "./loader.js";
+import { messageOf } from "../../core/utils";
 
 /* ================================================================== *
  * Minimal protobuf wire codec.
@@ -549,10 +550,6 @@ function statusCodeOf(err: unknown): number | undefined {
   return typeof code === "number" ? code : undefined;
 }
 
-function messageOf(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
-}
 
 /* ================================================================== *
  * Option validation

@@ -3,67 +3,25 @@ import * as protoLoader from "@grpc/proto-loader";
 import type { PackageDefinition, ServiceDefinition } from "@grpc/proto-loader";
 
 import { buildCatalog } from "./catalog.js";
-import type { GrpcEndpoint } from "./types.js";
-
-export type GrpcMethodKind =
-  | "unary"
-  | "server_streaming"
-  | "client_streaming"
-  | "bidi_streaming";
-
-export type GrpcManualSessionState =
-  | "idle"
-  | "connecting"
-  | "open"
-  | "closing"
-  | "closed"
-  | "error";
-
-export type GrpcDescriptorSourceKind = "proto" | "reflection";
-
-export interface GrpcManualSessionEvent {
-  direction: "outbound" | "inbound" | "status" | "meta";
-  event?: "open" | "metadata" | "data" | "status" | "error" | "end" | "close";
-  payload?: unknown;
-  metadata?: unknown;
-  code?: number;
-  details?: string;
-  statusName?: string;
-  error?: string;
-  at: number;
-}
-
-export interface GrpcManualSessionTarget {
-  address: string;
-  reflection?: boolean;
-  protoPaths?: string[];
-  service: string;
-  method: string;
-  metadata?: Record<string, string>;
-  deadlineMs?: number;
-  loaderOptions?: Record<string, unknown>;
-  channelOptions?: Record<string, unknown>;
-  tls?: unknown;
-  reflectionTimeoutMs?: number;
-  reflectionVersion?: "v1" | "v1alpha";
-  reflectionHost?: string;
-}
-
-export interface GrpcManualSession {
-  readonly state: GrpcManualSessionState;
-  readonly kind: GrpcMethodKind;
-  readonly source: GrpcDescriptorSourceKind;
-  readonly events: readonly GrpcManualSessionEvent[];
-  readonly warnings: readonly unknown[];
-  open(): Promise<void>;
-  send(message: unknown): Promise<void>;
-  close(): Promise<void>;
-  waitForClose(): Promise<void>;
-}
+import { scanProtoFiles, deriveIncludeDirsDetailed } from "./proto-dir.js";
+import type {
+  GrpcDescriptorSourceKind,
+  GrpcEndpoint,
+  GrpcManualSession,
+  GrpcManualSessionEvent,
+  GrpcManualSessionState,
+  GrpcManualSessionTarget,
+  GrpcMethodKind,
+} from "../../core/types";
+import type {
+  SessionEventDTO,
+  SessionSubscription,
+} from "../../core/session";
+import { createEventHub } from "../../core/session";
 
 /**
- * loadPackageDefinition 返回的 GrpcObject 里，路径中间节点是命名空间对象，
- * 只有叶子才是带 .service 的客户端构造函数。
+ * loadPackageDefinition returns a GrpcObject whose intermediate nodes are
+ * namespace objects; only leaves carry a `.service` client constructor.
  */
 type ServiceClientConstructor = (new (
   address: string,
@@ -72,6 +30,13 @@ type ServiceClientConstructor = (new (
 ) => grpc.Client & Record<string, any>) & {
   service: ServiceDefinition;
 };
+
+interface LoadedService {
+  client: grpc.Client & Record<string, any>;
+  methodName: string;
+  kind: GrpcMethodKind;
+  source: GrpcDescriptorSourceKind;
+}
 
 function createMetadata(input?: Record<string, string>): grpc.Metadata {
   const metadata = new grpc.Metadata();
@@ -114,9 +79,10 @@ function normalizeProtoPaths(target: GrpcManualSessionTarget): string[] {
 }
 
 /**
- * buildCatalog 对外把 packageDefinition 宽化成了 Record<string, unknown>，
- * 因为 discovery 只需要遍历它。运行时它就是 protoLoader.load() 的产物。
- * 这里先做形状校验再收窄，避免盲目断言把错误推迟到 new serviceCtor()。
+ * buildCatalog widens the package definition to Record<string, unknown>
+ * because discovery only iterates it; at runtime it is protoLoader.load()'s
+ * output. Shape-check here before narrowing, so a wrong assertion cannot be
+ * deferred to `new serviceCtor()`.
  */
 function asPackageDefinition(
   definition: Record<string, unknown> | undefined,
@@ -228,13 +194,6 @@ function resolveMethodOriginalName(
   );
 }
 
-interface LoadedService {
-  client: grpc.Client & Record<string, any>;
-  methodName: string;
-  kind: GrpcMethodKind;
-  source: GrpcDescriptorSourceKind;
-}
-
 function buildClient(
   serviceCtor: ServiceClientConstructor,
   target: GrpcManualSessionTarget,
@@ -274,12 +233,24 @@ async function loadServiceFromProto(
     );
   }
 
-  const packageDefinition = await protoLoader.load(protoPaths, {
+  // proto-loader accepts only real files (directories fail with EISDIR on
+  // newer versions). Expand every root through the same walker discovery
+  // uses, then hand it the resolved file list plus derived include roots.
+  const scan = await scanProtoFiles({ paths: protoPaths });
+  if (!scan.files.length) {
+    throw new Error(
+      "No .proto files were found under the given protoPaths.",
+    );
+  }
+  const include = deriveIncludeDirsDetailed(scan);
+
+  const packageDefinition = await protoLoader.load(scan.files, {
     keepCase: true,
     longs: String,
     enums: String,
     defaults: true,
     oneofs: true,
+    includeDirs: include.includeDirs,
     ...(target.loaderOptions ?? {}),
   });
 
@@ -297,9 +268,8 @@ async function loadServiceFromProto(
 }
 
 /**
- * 原实现只支持 protoPaths，却在错误信息里声称支持 reflection。
- * 这里补上真正的 reflection 分支：先用 buildCatalog 取回描述符，
- * 再用同一份 packageDefinition 构造运行时客户端。
+ * Reflection branch: fetch the descriptor through buildCatalog, then build the
+ * runtime client from the same package definition.
  */
 async function loadServiceFromReflection(
   target: GrpcManualSessionTarget,
@@ -363,15 +333,35 @@ async function loadService(
   return loadServiceFromReflection(target);
 }
 
-export async function createGrpcManualSession(
+/**
+ * Create a manual gRPC session.
+ *
+ * The factory is synchronous and performs no I/O: descriptor loading (proto
+ * files or reflection) happens lazily inside `open()`. This keeps the manual
+ * session contract uniform across protocols — construct first, drive later —
+ * and avoids a constructor that can throw network errors.
+ */
+export function createGrpcManualSession(
   target: GrpcManualSessionTarget,
-): Promise<GrpcManualSession> {
-  const events: GrpcManualSessionEvent[] = [];
+): GrpcManualSession {
+  const hub = createEventHub(
+    "grpc",
+    "grpc",
+    `grpc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
+    1000,
+  );
   const warnings: unknown[] = [];
-  const maxEvents = 1000;
 
   let state: GrpcManualSessionState = "idle";
+  let kind: GrpcMethodKind | undefined;
+  let source: GrpcDescriptorSourceKind | undefined;
   let sentCount = 0;
+
+  let loaded: LoadedService | undefined;
+  let metadata: grpc.Metadata | undefined;
+  let deadline: Date | undefined;
+
+  let openPromise: Promise<void> | undefined;
 
   let closeResolve: () => void = () => {};
 
@@ -379,24 +369,49 @@ export async function createGrpcManualSession(
     closeResolve = resolve;
   });
 
-  const { client, methodName, kind, source } = await loadService(target);
-  const metadata = createMetadata(target.metadata);
-  const deadline = getDeadline(target.deadlineMs);
-
   let activeCall: any = null;
 
   function record(event: GrpcManualSessionEvent) {
-    events.push(event);
-    if (maxEvents > 0 && events.length > maxEvents) {
-      events.splice(0, events.length - maxEvents);
-    }
+    const direction =
+      event.direction === "outbound"
+        ? "out"
+        : event.direction === "inbound"
+          ? "in"
+          : "meta";
+    const meta: Record<string, unknown> = {};
+    if (event.payload !== undefined) meta.payload = event.payload;
+    if (event.metadata !== undefined) meta.metadata = event.metadata;
+    if (event.code !== undefined) meta.code = event.code;
+    if (event.details !== undefined) meta.details = event.details;
+    if (event.statusName !== undefined) meta.statusName = event.statusName;
+
+    hub.emit({
+      direction,
+      kind: event.event ?? "event",
+      at: event.at,
+      state: hub.state,
+      meta: Object.keys(meta).length ? meta : undefined,
+      error: event.error,
+    });
+  }
+
+  function setState(next: GrpcManualSessionState): void {
+    state = next;
+    hub.setState(next);
   }
 
   function markClosed() {
     if (state !== "closed") {
-      state = "closed";
+      setState("closed");
       closeResolve();
     }
+  }
+
+  function requireLoaded(): LoadedService {
+    if (!loaded) {
+      throw new Error("gRPC session is not open");
+    }
+    return loaded;
   }
 
   function attachSharedListeners(call: any) {
@@ -436,7 +451,7 @@ export async function createGrpcManualSession(
         at: Date.now(),
       });
 
-      state = "error";
+      setState("error");
       closeResolve();
     });
 
@@ -458,18 +473,19 @@ export async function createGrpcManualSession(
       return activeCall;
     }
 
+    const service = requireLoaded();
     const options: Record<string, unknown> = {};
     if (deadline) {
       options.deadline = deadline;
     }
 
-    if (kind === "client_streaming") {
-      activeCall = client[methodName](
+    if (service.kind === "client_streaming") {
+      activeCall = service.client[service.methodName](
         metadata,
         options,
         (error: any, response: unknown) => {
           if (error) {
-            state = "error";
+            setState("error");
 
             record({
               direction: "status",
@@ -501,8 +517,8 @@ export async function createGrpcManualSession(
       return activeCall;
     }
 
-    if (kind === "bidi_streaming") {
-      activeCall = client[methodName](metadata, options);
+    if (service.kind === "bidi_streaming") {
+      activeCall = service.client[service.methodName](metadata, options);
       attachSharedListeners(activeCall);
 
       activeCall.on("data", (response: unknown) => {
@@ -521,6 +537,10 @@ export async function createGrpcManualSession(
   }
 
   return {
+    get protocol(): "grpc" {
+      return "grpc";
+    },
+
     get state() {
       return state;
     },
@@ -533,8 +553,14 @@ export async function createGrpcManualSession(
       return source;
     },
 
-    get events() {
-      return events;
+    get events(): readonly SessionEventDTO[] {
+      return hub.events;
+    },
+
+    onEvent(
+      listener: (event: SessionEventDTO) => void,
+    ): SessionSubscription {
+      return hub.onEvent(listener);
     },
 
     get warnings() {
@@ -542,31 +568,58 @@ export async function createGrpcManualSession(
     },
 
     async open() {
-      if (state !== "idle" && state !== "closed") {
+      if (openPromise) {
+        return openPromise;
+      }
+      if (state !== "idle" && state !== "closed" && state !== "error") {
         throw new Error(`gRPC session cannot open from state "${state}"`);
       }
 
-      state = "connecting";
+      setState("connecting");
+      openPromise = (async () => {
+        try {
+          const service = await loadService(target);
+          loaded = service;
+          kind = service.kind;
+          source = service.source;
+          metadata = createMetadata(target.metadata);
+          deadline = getDeadline(target.deadlineMs);
 
-      if (kind === "client_streaming" || kind === "bidi_streaming") {
-        createCallForStreamingRequestKinds();
-      }
+          if (kind === "client_streaming" || kind === "bidi_streaming") {
+            createCallForStreamingRequestKinds();
+          }
 
-      state = "open";
+          setState("open");
 
-      record({
-        direction: "meta",
-        event: "open",
-        payload: {
-          address: target.address,
-          service: target.service,
-          method: methodName,
-          requestedMethod: target.method,
-          kind,
-          descriptorSource: source,
-        },
-        at: Date.now(),
-      });
+          record({
+            direction: "meta",
+            event: "open",
+            payload: {
+              address: target.address,
+              service: target.service,
+              method: service.methodName,
+              requestedMethod: target.method,
+              kind,
+              descriptorSource: source,
+            },
+            at: Date.now(),
+          });
+        } catch (e) {
+          setState("error");
+          closeResolve();
+          record({
+            direction: "status",
+            event: "error",
+            error: e instanceof Error ? e.message : String(e),
+            at: Date.now(),
+          });
+          throw e;
+        } finally {
+          openPromise = undefined;
+        }
+      })();
+
+      return openPromise;
     },
 
     async send(message: unknown) {
@@ -581,12 +634,13 @@ export async function createGrpcManualSession(
         at: Date.now(),
       });
 
+      const service = requireLoaded();
       const options: Record<string, unknown> = {};
       if (deadline) {
         options.deadline = deadline;
       }
 
-      if (kind === "unary") {
+      if (service.kind === "unary") {
         if (sentCount > 0) {
           throw new Error("Unary gRPC call only supports one send()");
         }
@@ -594,13 +648,13 @@ export async function createGrpcManualSession(
         sentCount += 1;
 
         await new Promise<void>((resolve, reject) => {
-          const call = client[methodName](
+          const call = service.client[service.methodName](
             message,
             metadata,
             options,
             (error: any, response: unknown) => {
               if (error) {
-                state = "error";
+                setState("error");
 
                 record({
                   direction: "status",
@@ -638,7 +692,7 @@ export async function createGrpcManualSession(
         return;
       }
 
-      if (kind === "server_streaming") {
+      if (service.kind === "server_streaming") {
         if (sentCount > 0) {
           throw new Error(
             "Server-streaming gRPC call only supports one send()",
@@ -647,7 +701,7 @@ export async function createGrpcManualSession(
 
         sentCount += 1;
 
-        const call = client[methodName](message, metadata, options);
+        const call = service.client[service.methodName](message, metadata, options);
         activeCall = call;
         attachSharedListeners(call);
 
@@ -660,10 +714,16 @@ export async function createGrpcManualSession(
           });
         });
 
+        // send() resolves when the stream completes, not when the request is
+        // written, so a caller can close() right after send() without racing.
+        await new Promise<void>((resolve, reject) => {
+          call.on("status", () => resolve());
+          call.on("error", (error: unknown) => reject(error));
+        });
         return;
       }
 
-      if (kind === "client_streaming" || kind === "bidi_streaming") {
+      if (service.kind === "client_streaming" || service.kind === "bidi_streaming") {
         const call = createCallForStreamingRequestKinds();
 
         if (!call) {
@@ -685,7 +745,7 @@ export async function createGrpcManualSession(
         return;
       }
 
-      throw new Error(`Unsupported gRPC method kind: ${kind}`);
+      throw new Error(`Unsupported gRPC method kind: ${service.kind}`);
     },
 
     async close() {
@@ -698,7 +758,7 @@ export async function createGrpcManualSession(
         return;
       }
 
-      state = "closing";
+      setState("closing");
 
       record({
         direction: "meta",
@@ -712,15 +772,13 @@ export async function createGrpcManualSession(
         } else {
           markClosed();
         }
-
-        return;
-      }
-
-      if (activeCall && typeof activeCall.cancel === "function") {
+      } else if (activeCall && typeof activeCall.cancel === "function") {
         activeCall.cancel();
       } else {
         markClosed();
       }
+
+      await closePromise;
     },
 
     async waitForClose() {

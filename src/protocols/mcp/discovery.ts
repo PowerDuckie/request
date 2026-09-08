@@ -1,4 +1,12 @@
 import { err } from "../../core/errors";
+import type {
+  InitializeSessionInit,
+  McpCapability,
+  McpDiscoveryResult,
+  McpPrompt,
+  McpResource,
+  McpTool,
+} from "../../core/types";
 import { sendJsonRpc, nextRequestId, isJsonRpcError } from "./jsonrpc";
 
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
@@ -22,54 +30,6 @@ const LIST_RESULT_KEY = {
 type ListMethod = keyof typeof LIST_RESULT_KEY;
 
 const MAX_LIST_PAGES = 1000;
-
-export interface McpTool {
-  kind: "tool";
-  name: string;
-  /** Human-facing label, distinct from the machine `name`. */
-  title?: string;
-  description?: string;
-  inputSchema: any;
-  /** Server-declared execution constraints, e.g. `{ taskSupport: "forbidden" }`. */
-  execution?: Record<string, unknown>;
-}
-
-export interface McpResource {
-  kind: "resource";
-  /** Resource templates use `uriTemplate`; concrete resources use `uri`. */
-  uri?: string;
-  uriTemplate?: string;
-  name: string;
-  title?: string;
-  description?: string;
-  mimeType?: string;
-}
-
-export interface McpPrompt {
-  kind: "prompt";
-  name: string;
-  title?: string;
-  description?: string;
-  arguments?: Array<{ name: string; description?: string; required?: boolean }>;
-}
-
-export type McpCapability = McpTool | McpResource | McpPrompt;
-
-export interface McpDiscoveryResult {
-  serverInfo?: { name: string; version: string };
-  protocolVersion?: string;
-  sessionId?: string;
-  capabilities: McpCapability[];
-  warnings: string[];
-}
-
-export interface InitializeSessionInit {
-  headers?: Record<string, string>;
-  signal?: AbortSignal;
-  clientInfo?: { name: string; version: string };
-  /** Client capabilities advertised at initialize. Default: {}. */
-  capabilities?: Record<string, unknown>;
-}
 
 /**
  * Handshake with an MCP server and establish a session.

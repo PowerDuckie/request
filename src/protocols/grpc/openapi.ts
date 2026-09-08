@@ -59,6 +59,7 @@ export function writeGrpcOperations(
           address: endpoint.address,
           service: service.name,
           method: method.name,
+          kind: method.kind,
           reflection: (endpoint as any).reflection === true ? true : undefined,
           protoPaths: (endpoint as any).protoPaths,
           includeDirs: (endpoint as any).includeDirs,
@@ -301,10 +302,20 @@ export class GrpcProtocolAdapter implements ProtocolAdapter<any> {
     options: SendOptions,
     _ctx?: ExecuteContext,
   ): Promise<ExecResult> {
-    const sendOptions: GrpcSendOptions =
-      (options.values?.body as GrpcSendOptions | undefined) ??
-      (options as any).grpc?.sendOptions ??
-      {};
+    // Accept every reasonable spelling so callers never fight the adapter:
+    //   options.values.body (postman-shaped), options.grpc.sendOptions,
+    //   options.grpc.messages, or plain options.messages.
+    const fromValues = options.values?.body as GrpcSendOptions | undefined;
+    const fromGrpc = (options as any).grpc?.sendOptions ?? {};
+    const sendOptions: GrpcSendOptions = {
+      ...fromGrpc,
+      ...fromValues,
+      messages:
+        fromValues?.messages ??
+        fromGrpc.messages ??
+        (options as any).grpc?.messages ??
+        (options as any).messages,
+    };
 
     const result = await grpcCall(plan.target, sendOptions);
 

@@ -271,3 +271,74 @@ export function positiveInt(
   if (int <= 0) return fallback;
   return Math.min(int, max);
 }
+
+/**
+ * Best-effort JSON.parse. Returns `undefined` for anything that is not a
+ * plausible JSON payload, so callers can treat the result as a maybe-value.
+ */
+export function tryParseJson(
+  text: string | undefined | null,
+  contentType?: string,
+): unknown {
+  if (!text) return undefined;
+  if (contentType && !/json/i.test(contentType)) return undefined;
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  if (!/^[[{"\-\d]|^(true|false|null)$/.test(trimmed)) return undefined;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * JSON.stringify that never throws. Returns undefined for values JSON cannot
+ * represent; anything that still fails (circular reference, throwing toJSON)
+ * becomes a short descriptive marker instead of an exception.
+ */
+export function safeStringify(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "[unserializable]";
+  }
+}
+
+/**
+ * One-line, non-throwing description of an arbitrary thrown value.
+ * Prefer over String() which can throw on exotic objects.
+ */
+export function messageOf(value: unknown): string {
+  return value instanceof Error ? value.message : String(value);
+}
+
+/** Keys that look like credentials; used to mark env values as secrets. */
+export const SECRET_KEY_PATTERN =
+  /(token|secret|password|passwd|apikey|api_key|credential|private|authorization)/i;
+
+export function isSecretKey(key: string): boolean {
+  return SECRET_KEY_PATTERN.test(key);
+}
+
+/**
+ * Resolve a timeout after `ms`, honoring an optional abort signal.
+ * The timer is unref'd so a pending sleep never keeps the process alive.
+ */
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!(ms > 0)) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("Aborted while waiting."));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    (timer as any)?.unref?.();
+    if (signal?.aborted) return onAbort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}

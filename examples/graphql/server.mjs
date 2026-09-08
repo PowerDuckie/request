@@ -1,125 +1,74 @@
+// GraphQL fixture server for the graphql example and tests.
+// Serves a tiny schema over POST /graphql. A stream endpoint (SSE) is also
+// exposed so the client can show event-list rendering for GraphQL streams.
 import http from "node:http";
-import { buildSchema, graphql } from "graphql";
-
-// node examples/graphql/server.mjs &
-// GRAPHQL_URL=http://127.0.0.1:4100/graphql node examples/graphql/demo.mjs
+import { graphql, buildSchema } from "graphql";
 
 const schema = buildSchema(`
-  enum Role { ADMIN MEMBER GUEST }
-
-  type User {
-    id: ID!
-    name: String!
-    email: String
-    role: Role!
-  }
-
-  type Post {
-    id: ID!
-    title: String!
-    body: String!
-    author: User!
-    publishedAt: String
-  }
-
-  input CreatePostInput {
-    title: String!
-    body: String!
-    authorId: ID!
-  }
-
+  type Greeting { text: String!, language: String! }
   type Query {
-    "Fetch a single user by id."
-    user(id: ID!): User
-    "List users, optionally filtered by role."
-    users(role: Role): [User!]!
-    post(id: ID!): Post
+    hello(name: String!): String!
+    greeting(name: String!): Greeting!
   }
-
   type Mutation {
-    createPost(input: CreatePostInput!): Post!
+    setGreeting(language: String!): Boolean!
   }
 `);
 
-const users = new Map([
-  ["1", { id: "1", name: "Ada Lovelace", email: "ada@example.com", role: "ADMIN" }],
-  ["2", { id: "2", name: "Grace Hopper", email: "grace@example.com", role: "MEMBER" }],
-  ["3", { id: "3", name: "Alan Turing", email: null, role: "GUEST" }],
-]);
-
-const posts = new Map([
-  [
-    "p1",
-    {
-      id: "p1",
-      title: "Hello, GraphQL",
-      body: "First post.",
-      authorId: "1",
-      publishedAt: new Date().toISOString(),
-    },
-  ],
-]);
-let nextPostId = 2;
-
 const root = {
-  user: ({ id }) => users.get(String(id)) ?? null,
-  users: ({ role }) =>
-    Array.from(users.values()).filter((u) => !role || u.role === role),
-  post: ({ id }) => decoratePost(posts.get(String(id))),
-  createPost: ({ input }) => {
-    if (!users.has(String(input.authorId))) {
-      throw new Error(`Unknown authorId "${input.authorId}"`);
-    }
-    const post = {
-      id: `p${nextPostId++}`,
-      title: input.title,
-      body: input.body,
-      authorId: input.authorId,
-      publishedAt: new Date().toISOString(),
-    };
-    posts.set(post.id, post);
-    return decoratePost(post);
-  },
+  hello: ({ name }) => `Hello, ${name}!`,
+  greeting: ({ name }) => ({
+    text: `Hello, ${name}!`,
+    language: "en",
+  }),
+  setGreeting: () => true,
 };
 
-function decoratePost(post) {
-  if (!post) return null;
-  return { ...post, author: users.get(post.authorId) };
+function writeEvent(res, event, data) {
+  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
-const server = http.createServer((req, res) => {
-  if (req.method !== "POST" || new URL(req.url, "http://x").pathname !== "/graphql") {
-    res.writeHead(404, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: "not found" }));
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url, "http://localhost");
+
+  if (url.pathname === "/stream-hello" && req.method === "GET") {
+    res.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+    });
+    const name = url.searchParams.get("name") ?? "world";
+    writeEvent(res, "next", { data: { hello: `Hello, ${name} (1)!` } });
+    writeEvent(res, "next", { data: { hello: `Hello, ${name} (2)!` } });
+    writeEvent(res, "complete", { data: null });
+    res.end();
     return;
   }
 
-  let raw = "";
-  req.on("data", (chunk) => (raw += chunk));
-  req.on("end", async () => {
-    let body;
+  if (url.pathname === "/graphql" && req.method === "POST") {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    let query = "";
+    let variables = {};
     try {
-      body = JSON.parse(raw || "{}");
+      const parsed = JSON.parse(body);
+      query = parsed.query ?? "";
+      variables = parsed.variables ?? {};
     } catch {
       res.writeHead(400, { "content-type": "application/json" });
-      res.end(JSON.stringify({ errors: [{ message: "Invalid JSON body" }] }));
+      res.end(JSON.stringify({ errors: [{ message: "bad json body" }] }));
       return;
     }
-
-    const result = await graphql({
-      schema,
-      source: body.query,
-      rootValue: root,
-      variableValues: body.variables,
-      operationName: body.operationName,
-    });
-
+    const result = await graphql({ schema, source: query, rootValue: root, variableValues: variables });
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(result));
-  });
+    return;
+  }
+
+  res.writeHead(404, { "content-type": "application/json" });
+  res.end(JSON.stringify({ error: "not found" }));
 });
 
-const port = process.env.PORT ?? 4100;
-server.listen(port, () =>
-  console.log(`[graphql] listening on http://127.0.0.1:${port}/graphql`),
-);
+const port = Number(process.env.PORT ?? 4300);
+server.listen(port, "127.0.0.1", () => {
+  console.log(`graphql server listening on http://127.0.0.1:${port}/graphql`);
+});
