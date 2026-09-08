@@ -379,17 +379,20 @@ export function createGrpcManualSession(
           ? "in"
           : "meta";
     const meta: Record<string, unknown> = {};
-    if (event.payload !== undefined) meta.payload = event.payload;
     if (event.metadata !== undefined) meta.metadata = event.metadata;
     if (event.code !== undefined) meta.code = event.code;
     if (event.details !== undefined) meta.details = event.details;
     if (event.statusName !== undefined) meta.statusName = event.statusName;
 
+    // Message payloads go on `data` so renderers can display them directly;
+    // non-meta fields that are not the payload stay in `meta`.
+    const isMessage = event.event === "data";
     hub.emit({
       direction,
       kind: event.event ?? "event",
       at: event.at,
       state: hub.state,
+      data: isMessage ? event.payload : undefined,
       meta: Object.keys(meta).length ? meta : undefined,
       error: event.error,
     });

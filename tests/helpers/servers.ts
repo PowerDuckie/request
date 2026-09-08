@@ -36,6 +36,12 @@ function startServer(file: string, env: Record<string, string> = {}) {
   });
   child.stderr.on("data", (chunk) => {
     stderr += chunk.toString();
+    // Many example servers log readiness via console.error (stderr), so check
+    // both streams for the "listening" marker.
+    if (stderr.includes("listening") && !settle.resolved) {
+      settle.resolved = true;
+      settle.resolve(port);
+    }
   });
   child.on("exit", (code) => {
     if (!settle.resolved) {
@@ -76,7 +82,7 @@ export function startGraphQLServer() {
 }
 
 export function startMcpHttpServer() {
-  return startServer(example("mcp", "server.mjs"));
+  return startServer(example("mcp", "server.mjs"), { MCP_TRANSPORT: "http" });
 }
 
 export function startGrpcServer() {

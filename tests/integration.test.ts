@@ -88,14 +88,14 @@ describe("OpenAPI write-back across protocols", () => {
       includeDirs: [echoProtoDir],
     });
 
-    const operation = withOps.paths["/grpc/echo/Echo/UnaryEcho"].post;
+    const operation = withOps.paths["/grpc/demo/echo/Echo/Say"].post;
     expect(operation["x-protocol"]).toBe("grpc");
     expect(operation["x-grpc"].kind).toBe("unary");
     expect(operation["x-grpc"].address).toBe(address);
 
     const prepared = createClient().prepare({
       spec: withOps,
-      target: { path: "/grpc/echo/Echo/UnaryEcho", method: "post" },
+      target: { path: "/grpc/demo/echo/Echo/Say", method: "post" },
     });
     expect(prepared.stream.kind).toBe("grpc-unary");
     expect(prepared.display.mode).toBe("response");
@@ -103,7 +103,7 @@ describe("OpenAPI write-back across protocols", () => {
 
   it("writes MCP operations from live discovery with endpoint and method", async () => {
     const port = await servers.mcp.port;
-    const endpoint = `http://127.0.0.1:${port}`;
+    const endpoint = `http://127.0.0.1:${port}/mcp`;
     const { capabilities } = await discoverMcpCapabilities(endpoint);
     const spec = writeMcpOperations(
       { openapi: "3.2.0", info: { title: "m", version: "1" }, paths: {} },

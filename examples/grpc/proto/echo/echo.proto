@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package demo.echo;
 
-import "common/types.proto";
+import "../common/types.proto";
 
 service Echo {
   // unary

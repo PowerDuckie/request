@@ -71,18 +71,18 @@ describe("UnifiedSession event DTO", () => {
 describe("MCP sessions", () => {
   it("http manual session initializes, lists tools and calls one", async () => {
     const port = await servers.mcp.port;
-    const session = createManualSession({ kind: "mcp", endpoint: `http://127.0.0.1:${port}` });
+    const session = createManualSession({ kind: "mcp", endpoint: `http://127.0.0.1:${port}/mcp` });
     await session.open();
 
     expect(session.state).toBe("open");
-    expect((session as any).serverInfo?.name).toBe("echo-mcp");
+    expect((session as any).serverInfo?.name).toBe("protokit-demo-mcp");
     expect((session as any).sessionId).toBeTruthy();
 
     const tools = await (session as any).listTools();
-    expect(tools.items.map((tool: any) => tool.name).sort()).toEqual(["add", "echo"]);
+    expect(tools.items.map((tool: any) => tool.name).sort()).toEqual(["add", "echo", "get_weather"]);
 
     const reply = await (session as any).callTool({ name: "add", arguments: { a: 2, b: 3 } });
-    expect(reply.content[0].text).toContain('"sum":5');
+    expect(reply.content[0].text).toBe('5');
 
     const events = session.events;
     const kinds = events.map((event) => event.kind);
@@ -106,13 +106,13 @@ describe("MCP sessions", () => {
     });
 
     await session.open();
-    expect((session as any).serverInfo?.name).toBe("echo-mcp");
+    expect((session as any).serverInfo?.name).toBe("protokit-demo-mcp");
 
     const tools = await (session as any).listTools();
-    expect(tools.items.length).toBe(2);
+    expect(tools.items.length).toBe(3);
 
     const reply = await (session as any).callTool({ name: "echo", arguments: { text: "stdio" } });
-    expect(reply.content[0].text).toContain('"echo":"stdio"');
+    expect(reply.content[0].text).toBe('stdio');
 
     // Only one result per call, despite many raw lines on the pipe.
     expect(session.events.filter((event) => event.kind === "jsonrpc").length).toBeGreaterThanOrEqual(3);
@@ -128,8 +128,8 @@ describe("gRPC manual session", () => {
       address,
       protoPaths: [echoProtoPath],
       includeDirs: [echoProtoDir],
-      service: "echo.Echo",
-      method: "UnaryEcho",
+      service: "demo.echo.Echo",
+      method: "Say",
     });
 
     const seen: Array<Record<string, any>> = [];
@@ -140,7 +140,7 @@ describe("gRPC manual session", () => {
     expect((session as any).source).toBe("proto");
     expect(session.state).toBe("open");
 
-    await session.send({ messages: [{ text: "one-shot" }] });
+    await session.send({ text: "one-shot" });
     await session.close();
     expect(session.state).toBe("closed");
     expect(seen.some((event) => event.kind === "status")).toBe(true);
@@ -153,12 +153,12 @@ describe("gRPC manual session", () => {
       address,
       protoPaths: [echoProtoPath],
       includeDirs: [echoProtoDir],
-      service: "echo.Echo",
-      method: "ServerStreamEcho",
+      service: "demo.echo.Echo",
+      method: "Countdown",
     });
     await session.open();
     expect((session as any).kind).toBe("server_streaming");
-    await session.send({ messages: [{ text: "s", count: 2 }] });
+    await session.send({ from: 3, interval_ms: 100 });
     await session.close();
     expect(session.state).toBe("closed");
   });
