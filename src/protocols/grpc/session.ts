@@ -12,12 +12,12 @@ import type {
   GrpcManualSessionState,
   GrpcManualSessionTarget,
   GrpcMethodKind,
-} from "../../core/types";
+} from "../../core/types.js";
 import type {
   SessionEventDTO,
   SessionSubscription,
-} from "../../core/session";
-import { createEventHub } from "../../core/session";
+} from "../../core/session.js";
+import { createEventHub } from "../../core/session.js";
 
 /**
  * loadPackageDefinition returns a GrpcObject whose intermediate nodes are

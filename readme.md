@@ -1,4 +1,4 @@
-# @powerduck/request
+# @powerduck/openapi-request
 
 OpenAPI 3.2-first protocol debugger for HTTP, SSE, WebSocket, GraphQL, gRPC and MCP.
 One client surface, one event model, one write-back pipeline.
@@ -17,7 +17,7 @@ One client surface, one event model, one write-back pipeline.
 ## Installation
 
 ```bash
-npm install @powerduck/request
+npm install @powerduck/openapi-request
 ```
 
 Requires Node.js >= 18.17.
@@ -25,7 +25,7 @@ Requires Node.js >= 18.17.
 ## Quick Start
 
 ```ts
-import { createClient } from "@powerduck/request";
+import { createClient } from "@powerduck/openapi-request";
 
 const client = createClient();
 
@@ -669,7 +669,7 @@ All errors are thrown as `ProtoKitError` with a machine-readable `code`:
 | `MCP_EMPTY_RESPONSE` | No JSON-RPC message in the response. |
 
 ```ts
-import { ProtoKitError } from "@powerduck/request";
+import { ProtoKitError } from "@powerduck/openapi-request";
 
 try {
   await client.send(options);

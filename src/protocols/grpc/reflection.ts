@@ -1,5 +1,5 @@
 import { loadGrpc } from "./loader.js";
-import { messageOf } from "../../core/utils";
+import { messageOf } from "../../core/utils.js";
 
 /* ================================================================== *
  * Minimal protobuf wire codec.

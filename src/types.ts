@@ -1,5 +1,5 @@
 /* ================================================================== *
- * @powerduck/request - single public type surface
+ * @powerduck/openapi-request - single public type surface
  *
  * Every public type lives in this one file. Protocol modules import from
  * here (usually via the "./core/types" shim) and re-export nothing of their

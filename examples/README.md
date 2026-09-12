@@ -1,4 +1,4 @@
-# @powerduck/request examples
+# @powerduck/openapi-request examples
 
 Every example is a runnable `.mjs` script against a self-contained local
 server. Start the server first, then run the demo in a second terminal.

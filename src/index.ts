@@ -1,5 +1,5 @@
 /**
- * @powerduck/request - single public surface.
+ * @powerduck/openapi-request - single public surface.
  *
  * Everything a renderer or a script needs hangs off this one entry:
  *   - `createClient()`  : UI-first client (prepare / send / connect / discover

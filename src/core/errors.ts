@@ -8,7 +8,7 @@
  * `instanceof` alone is unsafe: a consumer may end up loading both the ESM and
  * the CJS build, which creates two distinct classes.
  */
-const PROTOKIT_ERROR_BRAND = Symbol.for("@powerduck/request.ProtoKitError");
+const PROTOKIT_ERROR_BRAND = Symbol.for("@powerduck/openapi-request.ProtoKitError");
 
 export class ProtoKitError extends Error {
   public readonly code: string;
